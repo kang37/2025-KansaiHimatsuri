@@ -106,3 +106,18 @@ write.csv(df_clustered_pca, "data_proc/clust_res_3.csv", row.names = F)
 library(mclust)
 adjustedRandIndex(df_clustered$Cluster, df_clustered_pca$Cluster)
 table(df_clustered$Cluster, df_clustered_pca$Cluster)
+
+# CA ----
+library(FactoMineR)
+library(factoextra)
+library(showtext)
+showtext_auto()
+
+# 假设 df$cluster 为聚类标签，df$文化財レベル 为文化层级
+tab <- table(df_clustered$Cluster, df_clustered$類型)
+
+# 对应分析
+res.ca <- CA(tab, graph = FALSE)
+
+# 可视化（行=聚类，列=文化等级）
+fviz_ca_biplot(res.ca, repel = TRUE)
