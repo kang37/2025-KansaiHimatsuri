@@ -101,3 +101,8 @@ df_clustered_pca <- df %>%
 
 # 导出结果。
 write.csv(df_clustered_pca, "data_proc/clust_res_3.csv", row.names = F)
+
+# Comparison ----
+library(mclust)
+adjustedRandIndex(df_clustered$Cluster, df_clustered_pca$Cluster)
+table(df_clustered$Cluster, df_clustered_pca$Cluster)
