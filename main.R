@@ -8,7 +8,7 @@ library(stringr)
 library(FactoMineR)
 library(tidyr)
 
-# Direct category ----
+# Direct cluster ----
 # 读入数据。
 df <- read_excel("data_raw/抽选案例用.xlsx") %>% 
   rename("神社寺院" = "神社・寺院") %>% 
@@ -54,8 +54,50 @@ cluster_result <- cutree(hc, k = k)
 df_clustered <- df %>%
   mutate(Cluster = cluster_result)
 
-# 查看前几行结果。
-head(df_clustered)
-
 # 导出结果。
 write.csv(df_clustered, "data_proc/clust_res.csv", row.names = F)
+
+# PCA before cluster ----
+# 提取“其他_”和“神社寺院_”开头的列。
+df_others <- df %>% select(starts_with("其他_"))
+df_shrine <- df %>% select(starts_with("神社寺院_"))
+
+# 对二元变量可以直接做PCA。
+pca_others <- PCA(df_others, graph = FALSE)
+pca_shrine <- PCA(df_shrine, graph = FALSE)
+plot(pca_others)
+plot(pca_shrine)
+
+# 提取前两主成分。
+df$其他_pc1 <- pca_others$ind$coord[, 1]
+df$其他_pc2 <- pca_others$ind$coord[, 2]
+df$神社_pc1 <- pca_shrine$ind$coord[, 1]
+df$神社_pc2 <- pca_shrine$ind$coord[, 2]
+
+# 合并基本变量作为最终聚类输入。
+df_cluster_input <- df %>%
+  select(
+    類型, 都道府県, 時間, 文化財レベル, 資材の使用量,
+    其他_pc1, 其他_pc2, 神社_pc1, 神社_pc2
+  ) %>% 
+  mutate(across(where(is.character), as.factor))
+
+# 聚类分析。
+gower_dist_pca <- daisy(df_cluster_input, metric = "gower")
+hc_pca <- hclust(gower_dist_pca, method = "ward.D2")
+# 聚类图可视化。
+png("data_proc/clust_res_3.png", width = 3000, height = 12000, res = 600)
+fviz_dend(hc_pca, k = 4, rect = TRUE, cex = 0.3) + coord_flip()
+dev.off()
+
+# 导出结果表格。
+# 设置聚类数。
+k <- 4
+cluster_result_pca <- cutree(hc_pca, k = k)
+
+# 加入原始数据，生成聚类结果表格。
+df_clustered_pca <- df %>%
+  mutate(Cluster = cluster_result_pca)
+
+# 导出结果。
+write.csv(df_clustered_pca, "data_proc/clust_res_3.csv", row.names = F)
