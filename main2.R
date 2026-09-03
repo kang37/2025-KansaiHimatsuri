@@ -683,8 +683,17 @@ plant_festival <- resource_df %>%
       ty <- unique(unlist(strsplit(na.omit(reason_types), "\\|")))
       if (length(ty) == 0) NA_character_ else paste(sort(ty), collapse = "|")
     },
+    # 同一(祭り,分類群)内で部位ごとにスコアが異なる場合があるため（例：9件で
+    # 代替可能性が部位間で不一致）、まず祭り内で単純平均してから祭り間を
+    # 府県ウェイトで平均する（図22で使用）。
+    mean_subst_fest = mean(subst_score, na.rm = TRUE),
+    mean_daily_fest = mean(daily_score, na.rm = TRUE),
+    mean_embed_fest = mean(embed_score, na.rm = TRUE),
+    has_subst_material = any(is_substitute_material, na.rm = TRUE),
     .groups = "drop"
   ) %>%
+  mutate(across(c(mean_subst_fest, mean_daily_fest, mean_embed_fest),
+                ~ ifelse(is.nan(.x), NA_real_, .x))) %>%
   left_join(fest_design, by = "festival")
 
 # 祭り × まとめ資源グループ（結果3の分類。図17bで使う）
@@ -2227,6 +2236,111 @@ p21d_daily_tek <- ggplot(daily_tek,
 
 ggsave(file.path(OUTPUT_DIR, "21d_daily_vs_tek.png"), p21d_daily_tek,
        width = 9, height = 5, dpi = 150)
+
+# ==============================================================================
+# 図22: 植物ごとの代替可能性 × 日常利用 × 調達方法（植物別小図）
+# ------------------------------------------------------------------------------
+# 1植物分類群につき1パネル、点＝1サンプル（資源レコード＝祭り×資源名の
+# 記録1件。1つの祭りで複数部位が記録されていれば複数点になる）。
+# x = 代替可能性　y = 日常利用　色 = 調達方法（3分類・連続的に濃淡が変わる
+# 配色だが凡例は離散カテゴリー。図16と同じ配色を再利用）。
+#
+# 【複数の調達方法をどう扱うか】
+#   1レコード内で調達方法が複数併記される場合（「氏子・保存会採取／地域住民
+#   提供」等）は、code_embeddedness() が既に「最も嵌入度の高い方法」を採用
+#   している（=そのレコードが到達しうる最大の自給度）。したがって色は
+#   平均や合成ではなく、この確定済みの離散カテゴリーをそのまま使う。
+#   前バージョンで試した「祭り間の連続値平均」は、複数の調達方法を1つの
+#   数値に潰してしまい実態が見えにくかったため、この案に差し替えた。
+# ------------------------------------------------------------------------------
+
+embed_colors_22 <- c(
+  "3 共同体が自ら採取・栽培" = "#1A6A1A",
+  "2 地域内から無償で入手"   = "#74C476",
+  "1 購入・地域外に依存"     = "#D62728",
+  "不明（調達方法未記録）"   = "gray70"
+)
+
+taxon_order_22 <- plant_festival %>%
+  count(resource_taxon, name = "n_festivals") %>%
+  arrange(desc(n_festivals)) %>%
+  pull(resource_taxon)
+
+sample_22 <- resource_df %>%
+  filter(!is.na(resource_taxon), resource_taxon != "非植物資材",
+         !is.na(subst_score), !is.na(daily_score)) %>%
+  mutate(
+    embed_label = case_when(
+      embed_score == 3 ~ "3 共同体が自ら採取・栽培",
+      embed_score == 2 ~ "2 地域内から無償で入手",
+      embed_score == 1 ~ "1 購入・地域外に依存",
+      TRUE             ~ "不明（調達方法未記録）"
+    ),
+    embed_label = factor(embed_label, levels = names(embed_colors_22))
+  )
+
+facet_n <- sample_22 %>% distinct(festival, resource_taxon) %>% count(resource_taxon, name = "n_fes")
+sample_22 <- sample_22 %>%
+  left_join(facet_n, by = "resource_taxon") %>%
+  group_by(resource_taxon) %>%
+  mutate(n_rec = n()) %>%
+  ungroup() %>%
+  mutate(taxon_label = paste0(resource_taxon, "（", n_fes, "祭り, ", n_rec, "点）"),
+         taxon_label = factor(taxon_label,
+           levels = unique(taxon_label[order(match(resource_taxon, taxon_order_22))])))
+
+cat("
+=== 図22 サンプル数（植物分類群別） ===
+")
+print(as.data.frame(sample_22 %>% distinct(resource_taxon, taxon_label, n_fes, n_rec) %>%
+  arrange(match(resource_taxon, taxon_order_22))))
+
+set.seed(20260903)
+p22 <- ggplot(sample_22, aes(x = subst_score, y = daily_score, color = embed_label)) +
+  geom_jitter(width = 0.16, height = 0.16, size = 2.2, alpha = 0.85) +
+  facet_wrap(~ taxon_label, ncol = 6) +
+  scale_color_manual(values = embed_colors_22, name = "調達方法", drop = FALSE) +
+  scale_x_continuous(limits = c(0.5, 3.5), breaks = 1:3,
+                     labels = c("1
+代替可", "2
+代替困難", "3
+代替不可")) +
+  scale_y_continuous(limits = c(0.5, 3.5), breaks = 1:3,
+                     labels = c("1
+日常的に
+使う", "2
+ほとんど
+ない", "3
+全く
+ない")) +
+  labs(
+    title = "植物ごとの代替可能性・日常利用・調達方法",
+    subtitle = paste0("1点＝1資源レコード（祭り×資源名）。同じ祭りで複数部位が記録されている場合は複数点。
+",
+                      "パネルの見出しは（利用祭り数, レコード点数）。点は重なりを避けるため位置を微小にずらしている（ジッター）。
+",
+                      "右上＝代替できず・日常利用が失われた祭礼専用資源。色＝その記録の調達方法（複数併記時は最も自給度の高い方法）"),
+    x = "代替可能性", y = "日常利用"
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        strip.text = element_text(size = 7.5),
+        axis.text = element_text(size = 7),
+        legend.position = "bottom")
+
+n_panels <- n_distinct(sample_22$resource_taxon)
+ggsave(file.path(OUTPUT_DIR, "22_subst_daily_embed.png"), p22,
+       width = 13, height = ceiling(n_panels / 6) * 2.1 + 1.5, dpi = 150)
+
+write.csv(
+  sample_22 %>%
+    mutate(pref = unname(FESTIVAL_PREF[festival])) %>%
+    select(pref, festival, resource_taxon, resource_raw, subst_score, daily_score,
+           embed_score, embed_label, method_cat, is_substitute_material),
+  file.path(OUTPUT_DIR, "plant_use_profile.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
+
 
 # ==============================================================================
 # 図18: 生息地依存ネットワーク（祭り × 景観タイプ）
