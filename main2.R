@@ -244,6 +244,10 @@ TAXON_RULES <- list(
 normalize_taxon <- function(x) {
   v <- str_replace_all(as.character(x), "（.*?）|\\(.*?\\)", "")
   v <- str_replace_all(v, "\\s+", "")
+  # 【重要】表記ゆれを規則適用の前に直す。
+  # 「ススギ」（ススキの誤記、三栖の火祭）は部分文字列に「スギ」を含むため、
+  # スギの規則に先に捕まってスギと誤分類されていた（2026-09-03 修正）。
+  v <- str_replace_all(v, "ススギ|すすぎ", "ススキ")
   out <- rep(NA_character_, length(v))
   for (r in TAXON_RULES) {
     hit <- is.na(out) & !is.na(v) & str_detect(v, r[2])
@@ -1729,20 +1733,29 @@ reason_grid <- expand_grid(
   left_join(reason_by_taxon %>% select(taxon_label, rlabel, share),
             by = c("taxon_label", "rlabel")) %>%
   mutate(share = ifelse(is.na(share), 0, share),
-         taxon_label = factor(taxon_label, levels = levels(reason_by_taxon$taxon_label)))
+         taxon_label = factor(taxon_label, levels = levels(reason_by_taxon$taxon_label))) %>%
+  # 着色はその植物の「特徴的な理由」だけに絞る。
+  # 行（＝植物）ごとに10類型の割合の75%分位点を求め、それを上回るセルのみ着色する。
+  # 着色されないセルも数値は表示するので情報は落ちない。
+  group_by(taxon_label) %>%
+  mutate(q75 = quantile(share, 0.75, names = FALSE),
+         share_plot = ifelse(share > q75, share, NA_real_)) %>%
+  ungroup()
 
-p17b <- ggplot(reason_grid, aes(x = rlabel, y = taxon_label, fill = share)) +
+p17b <- ggplot(reason_grid, aes(x = rlabel, y = taxon_label, fill = share_plot)) +
   geom_tile(color = "white", linewidth = 0.5) +
   geom_text(aes(label = ifelse(share > 0, scales::percent(share, accuracy = 1), "")),
             size = 2.7, family = "HiraginoSans-W3",
-            color = ifelse(reason_grid$share > 0.5, "white", "gray20")) +
-  scale_fill_gradient(low = "#FFF7EC", high = "#B30000",
+            color = ifelse(!is.na(reason_grid$share_plot) & reason_grid$share_plot > 0.5,
+                           "white", "gray20")) +
+  scale_fill_gradient(low = "#FDD8C0", high = "#B30000", na.value = "gray95",
                       labels = scales::percent, name = "その理由を挙げた割合") +
   labs(
     title = "主要植物ごとの選定理由の構成",
-    subtitle = paste0("3祭り以上で使われた植物。セル＝その植物を使う祭りのうち、",
-                      "その理由が語られた割合（府県ウェイト補正後）。\n",
-                      "1単位が複数類型を持つため行の合計は100%を超える。"),
+    subtitle = paste0("3祭り以上で使われた植物。セル＝その植物を使う祭りのうち\n",
+                      "その理由が語られた割合（行ごとの割合、府県ウェイト補正後）\n",
+                      "着色は行ごとの75%分位点を上回るセルのみ＝その植物に特徴的な理由\n",
+                      "1単位が複数類型を持つため行の合計は100%を超える"),
     x = NULL, y = NULL
   ) +
   theme_bw(base_family = "HiraginoSans-W3") +
