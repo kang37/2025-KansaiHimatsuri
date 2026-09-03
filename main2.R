@@ -38,8 +38,15 @@ library(patchwork) # 図01の左右並置に使用
 
 # 2026-09-02 更新：30シート版（新規16祭り追加）に切替
 # 旧: DATA_PATH <- "data_raw/火祭の資源と組織調査結果.xlsx"  (14シート, 出力先 data_proc/)
-DATA_PATH <- "data_raw/火祭の資源と組織調査結果_20260830.xlsx"
-OUTPUT_DIR <- "data_proc/20260902"
+DATA_PATH   <- "data_raw/火祭の資源と組織調査結果_20260830.xlsx"
+# 資源レベルの変数（日常利用・利用方法・選定理由・代替可能性・調達方法・
+# 調達時期・調達地の変化・調達地の景観）は、原票の表記ゆれとコード揺れを
+# 整理し終えた「分析内容まとめ.xlsx」から読む。
+# 原票（DATA_PATH）から読むのは祭りレベルの変数のみ：
+#   協力者年齢／関係者数・観光客数とその変化／信仰／祭り目的／保存会・氏子組織／
+#   火祭り中心世代／近年の課題／社会意義
+MATOME_PATH <- "data_raw/分析内容まとめ.xlsx"
+OUTPUT_DIR  <- "data_proc/20260902"
 dir.create(OUTPUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
 # ------------------------------------------------------------------------------
@@ -49,44 +56,9 @@ dir.create(OUTPUT_DIR, showWarnings = FALSE, recursive = TRUE)
 #       「関係社寺名」「氏子地域範囲」欄。順序は本研究の近畿圏の定義に合わせる。
 PREF_ORDER <- c("滋賀県", "京都府", "大阪府", "兵庫県", "奈良県", "和歌山県")
 
-FESTIVAL_PREF <- c(
-  # 滋賀県
-  "巽神社松明"               = "滋賀県",  # 近江八幡市糠塚町（奥石神社が祭礼に関与）
-  "松明を次世代に送る会"     = "滋賀県",  # 近江八幡市
-  "雄琴学区ヨシ松明一斉点火" = "滋賀県",  # 大津市雄琴学区
-  "太郎坊宮の火祭り"         = "滋賀県",  # 東近江市小脇町
-  "信楽の火祭り"             = "滋賀県",  # 甲賀市信楽町
-  "勝部の火祭り"             = "滋賀県",  # 守山市勝部町
-  "近江八幡左義長祭り"       = "滋賀県",  # 近江八幡市（日牟禮八幡宮）
-  "八幡祭り"                 = "滋賀県",  # 近江八幡市（日牟禮八幡宮）
-  "王の浜若宮神社"           = "滋賀県",  # 近江八幡市白王町王の浜
-  "小田神社"                 = "滋賀県",  # 近江八幡市北里学区
-  "大嶋奥津嶋神社"           = "滋賀県",  # 近江八幡市北津田町
-  # 京都府
-  "鞍馬の火祭"               = "京都府",  # 京都市左京区鞍馬
-  "三栖の火祭"               = "京都府",  # 京都市伏見区三栖
-  "大文字送り火"             = "京都府",  # 京都市左京区浄土寺
-  "嵯峨のお松明式"           = "京都府",  # 京都市右京区嵯峨（清凉寺）
-  "広河原松上げ"             = "京都府",  # 京都市左京区広河原
-  "花背松上げ"               = "京都府",  # 京都市左京区花脊八桝町
-  "雲ケ畑松上げ"             = "京都府",  # 京都市北区雲ヶ畑出谷町
-  # 大阪府
-  "がんがら火祭り"           = "大阪府",  # 池田市（旧池田村）
-  "まんどろ火祭り"           = "大阪府",  # 箕面市萱野
-  "麦わら松明"               = "大阪府",  # 箕面市北芝
-  # 兵庫県
-  "東光寺鬼会"               = "兵庫県",  # 加西市上万願寺（国指定重要無形民俗文化財）
-  "稲引き樽引き神事"         = "兵庫県",  # 三田市賀茂（加茂神社）
-  "湯村火祭り"               = "兵庫県",  # 美方郡新温泉町湯
-  # 奈良県
-  "往馬大社"                 = "奈良県",  # 生駒市
-  "吉祥草寺茅原大とんど"     = "奈良県",  # 御所市茅原
-  "ほうらんや火祭り"         = "奈良県",  # 橿原市東部六地区
-  # 和歌山県
-  "熊野速玉大社"             = "和歌山県",  # 新宮市（御燈祭り）
-  "稲むらの火祭り"           = "和歌山県",  # 有田郡広川町
-  "熊野那智"                 = "和歌山県"   # 東牟婁郡那智勝浦町
-)
+# 府県は 分析内容まとめ.xlsx の「結果3」府県欄を出典とする（読み込みは 1c の後）。
+# 手作業で作った旧マッピングと30件すべて一致することを確認済み。
+FESTIVAL_PREF <- NULL   # 1c の読み込み後に設定する
 
 # ------------------------------------------------------------------------------
 # 抽出調査の府県別ウェイト（事後層化）
@@ -335,160 +307,220 @@ age_long <- lapply(sheet_ids, function(sh) {
 }) %>% bind_rows()
 
 # ------------------------------------------------------------------------------
-# 1c. 植物資源 + 生息地 — 長形式
+# 1c. 植物資源 — 分析内容まとめ.xlsx から読み込み
 # ------------------------------------------------------------------------------
+# 【2026-09-03 全面改訂】
+# 従来は原票の各シートの資源ブロックを直接パースし、調達方法・代替可能性・
+# 景観・日常利用・利用方法を正規表現で推定していた。原票の記述が自由記述中心で
+# あるため、調達方法の嵌入度は47%が未分類、景観は新規シートで分類不能という
+# 状態だった。分析内容まとめ.xlsx はこれらを人手でコード化済みなので、
+# 資源レベルの変数はすべて同ファイルを唯一の出典とする。
+#
+# シート構成と対応する変数:
+#   結果1 祭り名×植物資源×日常利用の有無          → daily_raw
+#   結果2 植物資源名×使用祭り×利用方法×選定理由×代替可能性
+#                                                   → use_raw / reason_raw / subst_raw
+#   結果3 府県×祭り名×資源グループ10列            → FESTIVAL_PREF（府県の出典）
+#   結果4 祭り名×植物資源×調達方法×調達時期      → method_raw / timing_raw
+#   結果5 祭り名×植物資源×調達地の変化×調達地の景観
+#                                                   → change_raw / landscape_raw
+#
+# 【シート間の突合上の注意】
+#   ・資源名の表記が完全には揃っていない（稲ワラ/稲わら、ススキ/ススギ、
+#     もちワラ/もち米の藁、ヒノキ枝/ヒノキの枝、アカマツのの薪/アカマツの薪）。
+#     matome_key() で吸収してから結合する。
+#   ・結果5 は祭り名がブロックの中央行に置かれており、fill() では復元できない。
+#     結果4 の (祭り, 資源) の並びに逐次照合して復元する（検証結果は下で出力）。
+#   ・行数はシートごとに異なる（結果1/2 = 155、結果4 = 158、結果5 = 157）。
+#     結果4 を軸に左結合し、欠測は下記の理由で正常：
+#       非植物資材3件（古布・タオル／アルミ製棒・灯油／綿タオル）は結果2になし
+#       嵯峨の代替試行2件と吉祥草（祭具には不使用）は結果1になし
+#       吉祥草は結果5にもなし
 
-resource_raw <- lapply(sheet_ids, function(sh) {
-  df <- read_excel(DATA_PATH, sheet = sh, col_names = FALSE)
-  col1_clean <- str_replace_all(as.character(df[[1]]), "\\s+", "")
+matome_clean <- function(x) str_squish(str_replace_all(as.character(x), "[\r\n]+", " "))
 
-  resource_header <- which(col1_clean == "資源名")
-  group_row <- which(str_detect(col1_clean, "グループにおける植物資源"))
-
-  if (length(resource_header) == 0 || length(group_row) == 0) return(NULL)
-  start <- resource_header[1] + 1
-  end   <- group_row[1] - 1
-  if (start > end) return(NULL)
-
-  # ヘッダー行からカラム位置を特定
-  hdr <- as.character(df[resource_header[1], ])
-  get_col <- function(pat) { i <- which(str_detect(hdr, pat)); if (length(i)) i[1] else NA_integer_ }
-  landscape_col <- get_col("景観")
-  use_col       <- get_col("利用方法")
-  method_col    <- get_col("調達方法")
-  subst_col     <- get_col("代替")
-  reason_col    <- get_col("選定理由")
-  daily_col     <- get_col("日常利用")
-
-  rows <- df[start:end, ]
-  resource_names <- str_replace_all(as.character(rows[[1]]), "\\s+", "")
-  valid <- resource_names != "" & !is.na(resource_names) & resource_names != "NA"
-
-  get_col_vals <- function(col_idx) {
-    if (!is.na(col_idx)) as.character(rows[[col_idx]]) else rep(NA_character_, nrow(rows))
-  }
-
-  data.frame(
-    festival      = str_trim(sh),
-    resource_raw  = as.character(rows[[1]])[valid],
-    landscape_raw = get_col_vals(landscape_col)[valid],
-    use_raw       = get_col_vals(use_col)[valid],
-    method_raw    = get_col_vals(method_col)[valid],
-    subst_raw     = get_col_vals(subst_col)[valid],
-    reason_raw    = get_col_vals(reason_col)[valid],
-    daily_raw     = get_col_vals(daily_col)[valid],
-    stringsAsFactors = FALSE
-  )
-}) %>% bind_rows()
-
-# ------------------------------------------------------------------------------
-# 代替可能性スコア：
-#   3 = 代用できない（文化的に不可欠）
-#   2 = 代用品あるが使わない（部分的不可欠）
-#   1 = 代用できる（代替可能）
-# 調達方法の地域嵌入度スコア：
-#   3 = 共同体が自ら採取・栽培（最高嵌入）
-#   2 = 地域農家・知人からもらう（中嵌入）
-#   1 = 市場・業者から購入（最低嵌入）
-# TEKタイプ（植物の選定理由）：
-#   eco  = 生態的特性（燃焼性・強度・形状など）
-#   aes  = 審美的・感覚的（色・香り・見た目）
-#   trad = 伝統・慣習（昔から・伝統・慣習）
-#   prag = 実用的可及性（多い・手に入りやすい）
-#   symb = 象徴的・宗教的（縁起・神聖・奉納）
-# 利用方法の分類：
-#   燃焼材  = 松明の主要燃料・着火材
-#   構造材  = 芯棒・骨組み・軸・充填材
-#   化粧材  = 外部化粧・外装・外側を覆う
-#   装飾材  = 飾り・装飾・縁起物・笠
-#   結束材  = くくる・縛る・縄・巻く（ただし主用途が化粧・装飾でないもの）
-#   食材    = ダシ・食材
-#   ※ 複数カテゴリーをパイプ区切りで記録
-# ------------------------------------------------------------------------------
-
-code_use <- function(x) {
-  if (is.na(x) || str_trim(x) %in% c("", "NA", "NULL", "None")) return(NA_character_)
-  cats <- character(0)
-  if (str_detect(x, "燃料|燃焼材|燃焼物|火床で燃やす|着火|燃え|主要材料.*燃|燃える"))
-    cats <- c(cats, "燃焼材")
-  if (str_detect(x, "芯棒|骨組み|心棒|中心軸|充填|軸|枠|内部|中に入れ|中身|本体"))
-    cats <- c(cats, "構造材")
-  if (str_detect(x, "化粧|外側|外装|外部|仕上が|外面"))
-    cats <- c(cats, "化粧材")
-  if (str_detect(x, "飾り|装飾|縁起|鱗|笠|頭|先頭部|山車|ダシ|食材|奉納"))
-    cats <- c(cats, "装飾材")
-  if (str_detect(x, "くくる|縛|結束|縄|巻く|締め") &&
-      !any(c("化粧材","装飾材") %in% cats))
-    cats <- c(cats, "結束材")
-  if (str_detect(x, "ダシ|食材|食べ"))
-    cats <- c(cats, "食材")
-  if (length(cats) == 0) cats <- "その他"
-  paste(cats, collapse = "|")
+# シート間結合用のキー（表記ゆれの吸収）
+matome_key <- function(x) {
+  x %>% matome_clean() %>%
+    str_replace_all("[（(].*?[）)]", "") %>%
+    str_replace_all("[[:space:]]", "") %>%
+    str_replace_all("ワラ", "わら") %>%
+    str_replace_all("ガラ", "がら") %>%
+    str_replace_all("のの", "の") %>%
+    str_replace_all("ススギ", "ススキ") %>%
+    str_replace_all("^もち米の藁$|^もちワラ$|^もちわら$", "もち米") %>%
+    str_replace_all("の", "")
 }
 
-# 日常利用スコア：
-#   1 = 日常的に使う
-#   2 = ほとんどない
-#   3 = 全くない
+read_matome <- function(i) suppressMessages(read_excel(MATOME_PATH, sheet = i, col_names = TRUE))
+
+mt1 <- read_matome(1) %>% rename(festival = 1, resource_raw = 2, daily_raw = 3) %>%
+  fill(festival) %>%
+  mutate(across(everything(), matome_clean), k = matome_key(resource_raw))
+
+mt2 <- read_matome(2) %>%
+  rename(resource_raw = 1, festival = 2, use_raw = 3, reason_raw = 4, subst_raw = 5) %>%
+  fill(resource_raw) %>%
+  mutate(across(everything(), matome_clean), k = matome_key(resource_raw))
+
+mt3 <- read_matome(3) %>% rename(pref = 1, festival = 2) %>%
+  fill(pref) %>% mutate(across(c(pref, festival), matome_clean))
+
+# 府県マッピングを結果3から確定させる
+FESTIVAL_PREF <- setNames(mt3$pref, mt3$festival)
+stopifnot(all(sheets %in% names(FESTIVAL_PREF)))
+stopifnot(all(FESTIVAL_PREF %in% PREF_ORDER))
+
+mt4 <- read_matome(4) %>%
+  rename(festival = 1, resource_raw = 2, method_raw = 3, timing_raw = 4) %>%
+  fill(festival) %>%
+  mutate(across(everything(), matome_clean), k = matome_key(resource_raw))
+
+mt5 <- read_matome(5) %>%
+  rename(festival = 1, resource_raw = 2, change_raw = 3, landscape_raw = 4) %>%
+  mutate(across(everything(), matome_clean), k = matome_key(resource_raw))
+
+# --- 結果5 の祭り名を結果4 の並びから復元 ---
+mt5_spine <- mt4 %>% select(festival, k)
+mt5_fes <- rep(NA_character_, nrow(mt5)); .p <- 1L
+for (r in seq_len(nrow(mt5))) {
+  hit <- NA_integer_
+  for (q in .p:min(.p + 3L, nrow(mt5_spine)))
+    if (mt5_spine$k[q] == mt5$k[r]) { hit <- q; break }
+  if (!is.na(hit)) { mt5_fes[r] <- mt5_spine$festival[hit]; .p <- hit + 1L }
+}
+mt5$festival_est <- mt5_fes
+.lbl <- mt5 %>% filter(!is.na(festival), festival != "NA")
+cat("結果5の祭り復元 — 未復元:", sum(is.na(mt5$festival_est)),
+    "件 / ラベル不一致:", sum(.lbl$festival != .lbl$festival_est, na.rm = TRUE), "件\n")
+
+# --- 4シートの統合（結果4を軸に）---
+resource_raw <- mt4 %>%
+  select(festival, resource_raw, k, method_raw, timing_raw) %>%
+  left_join(mt1 %>% select(festival, k, daily_raw), by = c("festival", "k")) %>%
+  left_join(mt2 %>% select(festival, k, use_raw, reason_raw, subst_raw),
+            by = c("festival", "k")) %>%
+  left_join(mt5 %>% select(festival = festival_est, k, change_raw, landscape_raw),
+            by = c("festival", "k")) %>%
+  select(-k)
+
+cat("資源レコード:", nrow(resource_raw), "件 /",
+    n_distinct(resource_raw$festival), "祭り\n")
+
+# ------------------------------------------------------------------------------
+# コード化（分析内容まとめ.xlsx の統制語彙をスコアに変換）
 # ------------------------------------------------------------------------------
 
-code_daily <- function(x) {
-  if (is.na(x) || str_trim(x) %in% c("", "NA", "NULL", "None")) return(NA_integer_)
-  x_clean <- str_replace_all(as.character(x), "\\s+|\n.*", "")
-  case_when(
-    str_detect(x_clean, "^１|^1|日常的に使う|日常利用あり") ~ 1L,
-    str_detect(x_clean, "^２|^2|ほとんどない")              ~ 2L,
-    str_detect(x_clean, "^３|^3|全くない")                  ~ 3L,
-    TRUE ~ NA_integer_
-  )
+# 先頭の全角/半角数字コードを取り出す（「２　ほとんどない」「2B　以前より広い」）
+lead_code <- function(x) {
+  v <- chartr("０１２３４５６７８９", "0123456789", as.character(x))
+  str_match(str_squish(v), "^([0-9][AB]?)")[, 2]
 }
 
-# ------------------------------------------------------------------------------
+# 【 】内の分類ラベルを取り出す
+bracket_cat <- function(x) str_match(as.character(x), "^【([^】]+)】")[, 2]
 
+# 日常利用スコア：1=日常的に使う, 2=ほとんどない, 3=全くない
+code_daily <- function(x) suppressWarnings(as.integer(lead_code(x)))
+
+# 代替可能性：1=代用できる, 2=ある程度代用できる, 3=代用できない
+#   コード4「代替用材料」は“その資源自体が他資源の代替として使われている”という
+#   別次元の情報であり、1〜3の順序尺度には乗らない。順序尺度は NA とし、
+#   is_substitute_material フラグで保持する。
 code_substitutability <- function(x) {
-  x <- str_replace_all(as.character(x), "\\s+", "")
-  case_when(
-    str_detect(x, "^３|^3|代用できない|代用.*困難") ~ 3L,
-    str_detect(x, "^２|^2|代用品あるが|しない方がいい|限定的") ~ 2L,
-    str_detect(x, "^１|^1|代用できる|代替可能") ~ 1L,
-    TRUE ~ NA_integer_
-  )
+  v <- suppressWarnings(as.integer(lead_code(x)))
+  ifelse(is.na(v) | v > 3, NA_integer_, v)
 }
+
+# 調達地の変化：1=変化なし, 2A=以前より近い, 2B=以前より広い, 3=使用停止, 9=不明
+code_change <- function(x) {
+  v <- lead_code(x)
+  factor(ifelse(v == "9", NA_character_, v),
+         levels = c("1", "2A", "2B", "3"),
+         labels = c("変化なし", "以前より近い", "以前より広い", "使用停止"))
+}
+
+# 調達方法の地域嵌入度（結果4 の【 】カテゴリーから）
+#   3 = 共同体が自ら採取・栽培
+#   2 = 地域内の他者から無償で得る（農家・住民・寺社・事業者、副産物の再利用）
+#   1 = 市場・地域外に依存（購入・業者委託・地域外の提供者）
+#   NA = 現行調達なし／調達方法不明
+# 1つのセルに複数カテゴリーが「／」で並ぶ場合は最も高い嵌入度を採る。
+EMBED_LEVELS <- list(
+  "3" = c("氏子・保存会採取", "氏子・保存会栽培", "協働採取", "協働栽培"),
+  "2" = c("地域住民提供", "地元農家提供", "地元農家委託栽培", "地域内寺社提供",
+          "地域内事業者提供", "副産物・再利用", "寄付・奉納"),
+  "1" = c("地域外購入", "地域内購入", "購入", "外部業者委託", "外部協力者提供",
+          "外部協力者採取", "外部協力者仲介", "地域外農家提供",
+          "地域外農家委託栽培", "農家提供")
+)
 
 code_embeddedness <- function(x) {
-  x_clean <- str_replace_all(as.character(x), "\n", " ")
+  cat_str <- bracket_cat(x)
+  vapply(cat_str, function(cs) {
+    if (is.na(cs)) return(NA_integer_)
+    parts <- str_trim(str_split(cs, "／")[[1]])
+    parts <- str_replace_all(parts, "[（(].*?[）)]", "")   # （旧来）（推定）を落とす
+    sc <- integer(0)
+    for (lv in names(EMBED_LEVELS))
+      if (any(parts %in% EMBED_LEVELS[[lv]])) sc <- c(sc, as.integer(lv))
+    if (!length(sc)) return(NA_integer_)
+    max(sc)
+  }, integer(1), USE.NAMES = FALSE)
+}
+
+# 利用方法（結果2 の【 】カテゴリー）。「／」区切りの複数カテゴリーと、
+# （旧来）（代替材）（代替試行・不採用）（推定）という状態注記を分離する。
+code_use <- function(x) {
+  cs <- bracket_cat(x)
+  vapply(cs, function(z) {
+    if (is.na(z)) return(NA_character_)
+    parts <- str_trim(str_split(z, "／")[[1]])
+    parts <- unique(str_replace_all(parts, "[（(].*?[）)]", ""))
+    parts <- parts[parts != ""]
+    if (!length(parts)) return(NA_character_)
+    paste(parts, collapse = "|")
+  }, character(1), USE.NAMES = FALSE)
+}
+
+# 利用の位置づけ：現行 / 旧来 / 代替材 / 代替試行・不採用 / 推定
+code_use_status <- function(x) {
+  cs <- bracket_cat(x)
   case_when(
-    # 最高嵌入：共同体自採・自栽培・市民活動
-    str_detect(x_clean,
-      "市民.*刈り|住民が.*刈|住民が.*採|住民が.*探|住民が.*掘|集団活動|自分たちで刈|栽培する|栽培し|神田で|保存会が栽培|各隣組が.*栽培|隣組が.*田んぼ|手刈り|共同.*採取|境内.*切り出す|竹やぶから切|山から切り出") ~ 3L,
-    # 中嵌入：地域農家・知人・神社・組合から無償
-    str_detect(x_clean,
-      "農家.*持ってくる|農家.*もらう|農家にお願い|地域住民が持|地域の人が|持ち主.*了解|無償.*もらう|もらう|農家から|森林組合.*もらえる|町内.*採取|地域内で取") ~ 2L,
-    # 最低嵌入：購入（業者・ネット・市場）
-    str_detect(x_clean,
-      "購入|通販|業者|林業家から|木材屋|造園屋|花屋|竹屋|ヨシ屋|ヨシ業者|建材屋|丸山.*ヨシ屋") ~ 1L,
-    TRUE ~ NA_integer_
+    is.na(cs)                              ~ NA_character_,
+    str_detect(cs, "代替試行・不採用")     ~ "代替試行・不採用",
+    str_detect(cs, "代替候補")             ~ "代替候補",
+    str_detect(cs, "代替材")               ~ "代替材",
+    str_detect(cs, "旧来")                 ~ "旧来",
+    str_detect(cs, "推定")                 ~ "推定",
+    TRUE                                   ~ "現行"
   )
 }
 
+# 調達地の景観（結果5）。統制語彙に含まれる語だけを拾う（後続の自由記述を除去）。
+LANDSCAPE_VOCAB <- c("二次林", "人工林", "竹林", "神社林", "海岸防災林", "庭園",
+                     "水田", "湿地", "畑", "荒地", "木材流通")
+
+code_landscape <- function(x) {
+  vapply(as.character(x), function(z) {
+    if (is.na(z)) return(NA_character_)
+    hit <- LANDSCAPE_VOCAB[str_detect(z, fixed(LANDSCAPE_VOCAB))]
+    # 「二次林 過去：…」のように後続文がある場合も、語彙に一致した順で拾う
+    if (!length(hit)) return(NA_character_)
+    ord <- order(vapply(hit, function(h) str_locate(z, fixed(h))[1, 1], numeric(1)))
+    paste(hit[ord], collapse = "|")
+  }, character(1), USE.NAMES = FALSE)
+}
+
 # ------------------------------------------------------------------------------
-# 選定理由の類型（2026-09-02 新設）
+# 選定理由の類型（結果2「植物の選定理由（要点）」に適用）
 # ------------------------------------------------------------------------------
-# 【従来の code_tek との違い】
-# 旧 TEK 5類型（eco/aes/trad/prag/symb）は 0830版の選定理由の自由記述を
-# 読み直すと以下を区別できていなかった：
-#   ・燃焼特性（燃えやすさ・火力・持続）と 物理/加工特性（まっすぐ・軽い・強度）
-#   ・単なる入手容易性と、生業の副産物であること（里山・農林業との結合）
-#   ・本来の選好ではなく、資源枯渇・コスト・技術低下による代替選択
-#   ・安全・子供の参加・世代継承といった社会的機能
-#   ・環境保全そのものを目的とする選択（ヨシ刈り、間伐材利用）
-# そこで156件の原文から帰納的に10類型を立てた。1記録が複数類型を持つ
-# （実際 156件中104件が2類型以上）。
+# 156件の原文から帰納的に立てた10類型。1記録が複数類型を持つ。
 #   burn   燃焼特性       燃えやすい・火力・持続時間・油分・煙
 #   phys   物理/加工特性  まっすぐ・軽い・強度・しなやか・加工しやすい・寸法
 #   sens   感覚/美的      色・香り・見た目・音・緑・清浄感・装飾性
 #   avail  入手容易性     手に入りやすい・地域に多い・身近・調達が容易
-#   byprod 生業副産物     農業/林業の副産物・裏作・間伐材・不要材の循環利用
+#   byprod 生業副産物     農林業の副産物・裏作・間伐材・不要材の循環利用
 #   trad   伝統/慣習      昔からの材料・伝統・由来・継承
 #   symb   象徴/宗教      縁起・神聖・魔除け・奉納・豊穣の象徴・伝承
 #   subst  代替/制約      本命が確保できない/高価/技術低下のための代替選択
@@ -508,16 +540,10 @@ REASON_RULES <- list(
 )
 
 REASON_LABELS <- c(
-  burn   = "燃焼特性",
-  phys   = "物理・加工特性",
-  sens   = "感覚・美的",
-  avail  = "入手容易性",
-  byprod = "生業副産物",
-  trad   = "伝統・慣習",
-  symb   = "象徴・宗教",
-  subst  = "代替・制約",
-  social = "社会的機能",
-  env    = "環境保全"
+  burn = "燃焼特性", phys = "物理・加工特性", sens = "感覚・美的",
+  avail = "入手容易性", byprod = "生業副産物", trad = "伝統・慣習",
+  symb = "象徴・宗教", subst = "代替・制約", social = "社会的機能",
+  env = "環境保全"
 )
 
 code_reason <- function(x) {
@@ -532,90 +558,44 @@ code_reason <- function(x) {
   paste(ty, collapse = "|")
 }
 
-code_tek <- function(x) {
-  x <- str_replace_all(as.character(x), "\n", " ")
-  if (is.na(x) || str_trim(x) %in% c("", "NA", "NULL")) return(NA_character_)
-  types <- character(0)
-  if (str_detect(x, "燃えやす|燃焼|火力|中空|軽い|強度|柔軟|火に強|油が多|まっすぐ|音がよ|バチバチ|水分|着火|長持ち|細くて|温度"))
-    types <- c(types, "eco")
-  if (str_detect(x, "色が|綺麗|香り|見た目|肌が|形が|緑が|清浄|美し"))
-    types <- c(types, "aes")
-  if (str_detect(x, "昔から|伝統|慣習|歴史|昔のやり方|昔の.*材料|慣行|由来"))
-    types <- c(types, "trad")
-  if (str_detect(x, "手に入りやす|多い|入手が容易|調達.*便利|確保できる|近くで|豊富|農産物"))
-    types <- c(types, "prag")
-  if (str_detect(x, "縁起|神聖|奉納|めでた|象徴|清め|豊作.*証|神事|神様|御幣|紙垂"))
-    types <- c(types, "symb")
-  if (length(types) == 0) return(NA_character_)
-  paste(types, collapse = "|")
-}
-
 # ------------------------------------------------------------------------------
-# 生息地（景観）の正規化
+# 資源レベルの解析用データ
 # ------------------------------------------------------------------------------
-# 【2026-09-02 改訂の理由】
-# 14シート版では景観欄が統制語彙（森林／湿地／水田／畑／荒地／庭）で記入されて
-# いたが、30シート版の新規16シートは自由記述（例「賀茂周辺の赤松林・里山。冬に
-# 枯死・樹脂化した松を探す山林利用。」）で記入されている。旧来の前方一致置換では
-# 分類できないため、キーワードによる優先順位付き分類に変更した。
-# ・旧6カテゴリーは維持し、新データで頻出する2類型を追加：
-#     草地       … ススキ群落・草本景観など二次草原（旧「荒地」とは区別）
-#     流通・生活空間 … 製材所・木材流通・購入・各家庭など景観と呼べない調達元
-# ・「茅原」は地名（御所市茅原）でもあるため草地キーワードから除外している。
-# ・判定結果は landscape_mapping_check.csv に原文つきで出力するので要確認。
-classify_landscape <- function(x) {
-  v <- str_replace_all(as.character(x), "[\r\n]+", " ")
-  out <- rep(NA_character_, length(v))
-  rules <- list(
-    c("流通・生活空間", "^製材所|^木材加工|木材流通|樽製造|企業協力|各家庭|旅館|温泉観光施設|生活・観光空間|野外活動施設"),
-    c("水田",  "水田|田んぼ|稲作|田の隅|神田"),
-    c("湿地",  "ヨシ原|よし原|湿地|河川|湖岸|水辺|川沿い"),
-    c("畑",    "畑|農地|圃場"),
-    c("草地",  "ススキ群落|草本景観|草地|原っぱ|草原|ススキ状"),
-    c("森林",  "森林|山林|里山|竹林|竹薮|竹やぶ|松林|雑木林|二次林|社叢|境内|神社の森|樹林|山地|丘陵|林縁|林道|防災林|伐採跡|林$|林。|林・|林、"),
-    c("庭",    "庭園|^庭$|屋敷林"),
-    c("荒地",  "荒地|空地|放棄地"),
-    c("流通・生活空間", "流通|購入|業者|外部流通|市場")
-  )
-  for (r in rules) {
-    hit <- is.na(out) & !is.na(v) & str_detect(v, r[2])
-    out[hit] <- r[1]
-  }
-  out[!is.na(v) & str_detect(v, "^(なし|NA|NULL|不明)$")] <- NA_character_
-  out
-}
-
 resource_df <- resource_raw %>%
   mutate(
-    resource_norm = normalize_resource(resource_raw),
-    # 生息地の正規化（classify_landscape() を参照）
-    landscape_norm = classify_landscape(landscape_raw),
-    # 代替可能性スコア（1〜3）
-    subst_score = code_substitutability(subst_raw),
-    # 調達方法の嵌入度スコア（1〜3）
-    embed_score = code_embeddedness(method_raw),
-    # TEKタイプ（複数）
-    tek_types = mapply(code_tek, reason_raw),
-    # 利用方法カテゴリー（複数可）
-    use_types = mapply(code_use, use_raw),
-    # 日常利用スコア（1〜3）
-    daily_score = mapply(code_daily, daily_raw),
-    # 植物分類群（部位・形態を落とした集約。種類数のカウントに使う）
+    resource_norm  = normalize_resource(resource_raw),
     resource_taxon = normalize_taxon(resource_raw),
-    # 選定理由の類型（複数可、パイプ区切り）
-    reason_types = vapply(reason_raw, code_reason, character(1))
+    # landscape_all は「湿地|荒地」のように複数景観を持つ場合があるため、
+    # 生息地の集計では separate_rows() で展開して使う。
+    # landscape_norm は主景観（記載順の最初）。
+    landscape_all  = code_landscape(landscape_raw),
+    landscape_norm = str_replace(landscape_all, "\\|.*$", ""),
+    subst_score    = code_substitutability(subst_raw),
+    is_substitute_material = str_detect(replace_na(lead_code(subst_raw), ""), "^4$"),
+    embed_score    = code_embeddedness(method_raw),
+    method_cat     = bracket_cat(method_raw),
+    daily_score    = code_daily(daily_raw),
+    use_types      = code_use(use_raw),
+    use_status     = code_use_status(use_raw),
+    change_cat     = code_change(change_raw),
+    reason_types   = vapply(reason_raw, code_reason, character(1))
   ) %>%
-  # 長すぎる行（注記として混入したもの）と空白・NAを除去
   filter(
     !is.na(resource_norm),
     str_trim(resource_norm) != "",
     resource_norm != "NA",
-    nchar(resource_norm) <= 20,
-    !str_detect(resource_norm, "[。！？]|使用不可|注意"),
-    # 2026-09-02 追加：本分析は「植物資源」を対象とするため非植物資材を除外
-    # （調査票側で「非植物補助資材」と注記されたアルミ製升・灯油、古布・タオル等）
-    resource_norm != "非植物資材"
+    # 本分析は「植物資源」を対象とするため非植物資材を除外
+    resource_norm != "非植物資材",
+    resource_taxon != "非植物資材"
   )
+
+cat("\n=== 分析内容まとめ由来のコード化の網羅率（植物資源", nrow(resource_df), "件）===\n")
+for (v in c("subst_score", "embed_score", "daily_score", "use_types",
+            "landscape_norm", "reason_types")) {
+  cat(sprintf("  %-15s 有効 %3d 件（欠測 %d）\n", v,
+              sum(!is.na(resource_df[[v]])), sum(is.na(resource_df[[v]]))))
+}
+cat("  うち代替用材料（代替可能性コード4）:", sum(resource_df$is_substitute_material, na.rm = TRUE), "件\n")
 
 # ==============================================================================
 # 植物 × 祭り の解析単位と、府県ウェイトによる推定
@@ -1187,7 +1167,7 @@ p09b_embed <- matrix_embed %>%
   scale_fill_gradient(low = "#D62728", high = "#1A6A1A", na.value = "#EEEEEE",
                       limits = c(1, 3),
                       breaks = 1:3,
-                      labels = c("1 市場購入", "2 地域農家", "3 共同体自採"),
+                      labels = c("1 購入・地域外", "2 地域内から無償", "3 共同体が自ら"),
                       name = "調達嵌入度") +
   labs(title = "植物資源の使用状況 × 調達嵌入度",
        subtitle = "灰色 = 当該祭りで使用なし",
@@ -1332,7 +1312,10 @@ if (nrow(cor_data) >= 4) {
 # ==============================================================================
 
 habitat_diversity <- resource_df %>%
-  filter(!is.na(landscape_norm) & landscape_norm != "なし") %>%
+  filter(!is.na(landscape_all), landscape_all != "なし") %>%
+  select(-landscape_norm) %>%
+  separate_rows(landscape_all, sep = "\\|") %>%
+  rename(landscape_norm = landscape_all) %>%
   group_by(festival) %>%
   summarise(
     n_habitats  = n_distinct(landscape_norm),
@@ -1554,7 +1537,8 @@ ggsave(file.path(OUTPUT_DIR, "15_cultural_keystone_species.png"), p15_keystone,
 
 # ==============================================================================
 # 図16: 文化-生態嵌入度（調達方法の地域性）
-#   各祭りの嵌入度分布：3=共同体自採、2=地域農家から、1=市場購入
+#   各祭りの嵌入度分布：3=共同体が自ら採取・栽培、2=地域内の他者から無償で得る
+#   （農家・住民・寺社・事業者、副産物の再利用）、1=購入・地域外に依存
 # ==============================================================================
 
 embed_festival <- resource_df %>%
@@ -1578,9 +1562,9 @@ embed_long <- resource_df %>%
   mutate(
     embed_label = factor(embed_score,
                          levels = c(3, 2, 1),
-                         labels = c("3: 共同体自採/自栽培",
-                                    "2: 地域農家・知人から",
-                                    "1: 市場・業者購入"))
+                         labels = c("3: 共同体が自ら採取・栽培",
+                                    "2: 地域内から無償で入手",
+                                    "1: 購入・地域外に依存"))
   ) %>%
   group_by(festival, embed_label) %>%
   summarise(n = n(), .groups = "drop") %>%
@@ -1602,9 +1586,9 @@ p16_embed <- embed_long %>%
   ) +
   coord_flip() +
   scale_fill_manual(
-    values = c("3: 共同体自採/自栽培"  = "#1A6A1A",
-               "2: 地域農家・知人から" = "#74C476",
-               "1: 市場・業者購入"     = "#D62728"),
+    values = c("3: 共同体が自ら採取・栽培" = "#1A6A1A",
+               "2: 地域内から無償で入手"   = "#74C476",
+               "1: 購入・地域外に依存"     = "#D62728"),
     name = "調達方法"
   ) +
   scale_y_continuous(labels = scales::percent, limits = c(0, 1.12)) +
@@ -1950,7 +1934,8 @@ ggsave(file.path(OUTPUT_DIR, "21c_daily_by_resource.png"), p21c_daily_resource,
 # ==============================================================================
 
 daily_tek <- resource_df %>%
-  filter(!is.na(daily_score), !is.na(tek_types)) %>%
+  filter(!is.na(daily_score), !is.na(reason_types)) %>%
+  rename(tek_types = reason_types) %>%
   mutate(
     daily_label = factor(
       case_when(daily_score == 1 ~ "1 日常的に使う",
@@ -1961,10 +1946,9 @@ daily_tek <- resource_df %>%
   ) %>%
   tidyr::unnest(tek_split) %>%
   filter(tek_split != "") %>%
-  mutate(tek_label = recode(tek_split,
-    "eco"  = "生態的特性", "aes"  = "美観・形状",
-    "trad" = "伝統・慣習", "prag" = "実用・入手容易",
-    "symb" = "象徴・宗教")) %>%
+  # 2026-09-03: 旧TEK5類型から新しい選定理由10類型に差し替え
+  mutate(tek_label = unname(REASON_LABELS[tek_split])) %>%
+  filter(!is.na(tek_label)) %>%
   count(tek_label, daily_label) %>%
   group_by(tek_label) %>%
   mutate(pct = n / sum(n) * 100) %>%
@@ -2004,7 +1988,10 @@ ggsave(file.path(OUTPUT_DIR, "21d_daily_vs_tek.png"), p21d_daily_tek,
 # ==============================================================================
 
 habitat_net <- resource_df %>%
-  filter(!is.na(landscape_norm) & landscape_norm != "なし") %>%
+  filter(!is.na(landscape_all), landscape_all != "なし") %>%
+  select(-landscape_norm) %>%
+  separate_rows(landscape_all, sep = "\\|") %>%
+  rename(landscape_norm = landscape_all) %>%
   distinct(festival, landscape_norm) %>%
   group_by(landscape_norm) %>%
   mutate(n_festivals_using = n()) %>%
@@ -2105,8 +2092,13 @@ write.csv(
 
 write.csv(
   resource_df %>% select(festival, resource_raw, resource_norm,
-                         landscape_norm, method_raw, subst_raw, subst_score,
-                         embed_score, reason_raw, tek_types),
+                         landscape_raw, landscape_all, landscape_norm,
+                         method_raw, method_cat, embed_score,
+                         timing_raw, change_raw, change_cat,
+                         use_raw, use_types, use_status,
+                         subst_raw, subst_score, is_substitute_material,
+                         daily_raw, daily_score,
+                         reason_raw, reason_types),
   file.path(OUTPUT_DIR, "resource_detail.csv"),
   row.names = FALSE, fileEncoding = "UTF-8"
 )
@@ -2132,9 +2124,8 @@ write.csv(
 # 景観分類の判定結果（原文つき）— classify_landscape() の妥当性確認用
 write.csv(
   resource_df %>%
-    select(festival, resource_raw, landscape_raw, landscape_norm) %>%
-    mutate(landscape_raw = str_replace_all(landscape_raw, "[\r\n]+", " ")) %>%
-    arrange(landscape_norm, festival),
+    select(festival, resource_raw, landscape_raw, landscape_all) %>%
+    arrange(landscape_all, festival),
   file.path(OUTPUT_DIR, "landscape_mapping_check.csv"),
   row.names = FALSE, fileEncoding = "UTF-8"
 )
@@ -2145,12 +2136,14 @@ write.csv(
 
 cat("\n========================================\n")
 cat("分析完了。出力 (", OUTPUT_DIR, "):\n", sep = "")
-cat("  01〜14: 基本統計・組織・資源・信仰・目的 分析\n")
+cat("  01: 基本プロファイル（協力者年齢×植物資源種数）\n")
+cat("  03a/03b: 植物利用頻度（府県ウェイト補正）と府県別利用率\n")
+cat("  02,05〜14: 組織・信仰・目的・資源マトリクス 分析\n")
 cat("  --- 生物文化多様性分析 ---\n")
 cat("  15_cultural_keystone_species.png     文化的関鍵種\n")
 cat("  16_procurement_embeddedness.png      文化-生態嵌入度\n")
-cat("  17a_tek_types_overall.png            TEKタイプ全体分布\n")
-cat("  17b_tek_by_festival.png              TEKタイプ祭り別構成\n")
+cat("  17a_reason_types_overall.png         選定理由10類型の全体分布\n")
+cat("  17b_reason_by_plant.png              主要植物ごとの選定理由構成\n")
 cat("  18_habitat_dependency_network.png    生息地依存ネットワーク\n")
 cat("  20_use_vs_substitutability.png      利用方法 × 代替可能性\n")
 cat("  21a_daily_use_distribution.png     日常利用スコア全体分布\n")
