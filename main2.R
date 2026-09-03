@@ -425,6 +425,56 @@ mt5$festival_est <- mt5_fes
 cat("結果5の祭り復元 — 未復元:", sum(is.na(mt5$festival_est)),
     "件 / ラベル不一致:", sum(.lbl$festival != .lbl$festival_est, na.rm = TRUE), "件\n")
 
+# --- 結果6 植物資源供給上の交流と生産保全活動（祭りレベル、1行=1祭り）---
+# 「話題」「管理活動」ともチェックボックス選択肢＋自由記述の構造。
+# 選択肢は統制語彙になっているので、先頭の一致でスコア化する。
+#   話題（グループ内でどれだけ話すか）:
+#     4 よくこの種について話す　3 時々話すことがある
+#     2 話題に上がるが詳しくは話さない　1 話題にあがらない、話さない
+#   管理活動（生産・保全がどこまで行われているか）:
+#     3 全面的に行われている（栽培・植栽を含む積極的生産）
+#     2 採取・管理が行われている（栽培はせず、採取・調達ネットワークの維持のみ。
+#       原文に「計画栽培は行っていない」等の明記が複数ある）
+#     1 行っていない
+TOPIC_LABELS <- c("1" = "話題にあがらない", "2" = "詳しくは話さない",
+                  "3" = "時々話す",         "4" = "よく話す")
+MGMT_LABELS  <- c("1" = "行っていない",
+                  "2" = "採取・管理のみ（栽培なし）",
+                  "3" = "全面的な生産（栽培・植栽あり）")
+
+code_topic <- function(x) case_when(
+  str_detect(x, "^□\\s*よくこの種について話す")             ~ 4L,
+  str_detect(x, "^□\\s*時々この種について話すことがある")   ~ 3L,
+  str_detect(x, "^□\\s*話題に上がるが詳しくは話さない")     ~ 2L,
+  str_detect(x, "^□\\s*話題にあがらない")                   ~ 1L,
+  TRUE ~ NA_integer_
+)
+code_mgmt <- function(x) case_when(
+  str_detect(x, "^□\\s*全面的に行われている")       ~ 3L,
+  str_detect(x, "^□\\s*採取・管理が行われている")   ~ 2L,
+  str_detect(x, "^□\\s*行っていない")               ~ 1L,
+  TRUE ~ NA_integer_
+)
+
+mt6 <- read_matome(6) %>%
+  rename(festival = 1, topic_raw = 2, mgmt_raw = 3) %>%
+  mutate(across(everything(), matome_clean))
+
+festival_engagement <- mt6 %>%
+  mutate(
+    pref        = factor(unname(FESTIVAL_PREF[festival]), levels = PREF_ORDER),
+    topic_score = code_topic(topic_raw),
+    mgmt_score  = code_mgmt(mgmt_raw),
+    topic_label = factor(unname(TOPIC_LABELS[as.character(topic_score)]),
+                         levels = unname(TOPIC_LABELS)),
+    mgmt_label  = factor(unname(MGMT_LABELS[as.character(mgmt_score)]),
+                         levels = unname(MGMT_LABELS))
+  )
+
+cat("\n=== 結果6 話題・管理活動のコード化 ===\n")
+cat("未分類 話題:", sum(is.na(festival_engagement$topic_score)),
+    " 管理活動:", sum(is.na(festival_engagement$mgmt_score)), "（各30件中）\n")
+
 # --- 4シートの統合（結果4を軸に）---
 resource_raw <- mt4 %>%
   select(festival, resource_raw, k, method_raw, timing_raw) %>%
@@ -2859,6 +2909,143 @@ ggsave(file.path(OUTPUT_DIR, "26_mean_resources_by_pref.png"), p26,
 
 write.csv(div_by_pref, file.path(OUTPUT_DIR, "mean_resources_by_pref.csv"),
           row.names = FALSE, fileEncoding = "UTF-8")
+
+# ==============================================================================
+# 図27: 資源をめぐる話題頻度・生産保全活動の交差分析
+# ------------------------------------------------------------------------------
+# 27a 話題頻度 × 管理活動レベル のクロス表
+# 27b 話題・管理活動と、既出の変数（調達嵌入度・祭りタイプ・府県）との関係
+#
+# 【解釈上の注意】
+# mgmt_score は旧14祭り（2026-06調査）と新16祭り（2026-08追加調査）で
+# 分布が偏っている：旧14祭りは11/14が「全面的（3）」、新16祭りは13/16が
+# 「採取・管理のみ（2）」。実際に生産活動の違いを反映している可能性もあるが、
+# 聞き取り・コーディングの時期差（新しい調査ほど「計画栽培はしていない」と
+# いう限定を明示的に聞き取れている）による可能性も排除できない。府県との
+# 関係を見る際は、この2群がどの府県に対応するかも併せて確認すること。
+# ==============================================================================
+
+cat("
+=== 話題スコア × 管理活動スコア クロス表 ===
+")
+print(table(topic = festival_engagement$topic_score, mgmt = festival_engagement$mgmt_score))
+cat("Spearman相関（話題 vs 管理活動）:",
+    round(cor(festival_engagement$topic_score, festival_engagement$mgmt_score,
+              method = "spearman"), 3), "
+")
+
+# --- 27a: クロス表ヒートマップ ---
+cross27a <- festival_engagement %>% count(topic_label, mgmt_label, .drop = FALSE)
+
+p27a <- ggplot(cross27a, aes(x = mgmt_label, y = topic_label, fill = n)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = ifelse(n > 0, n, "")), size = 5, color = "gray15") +
+  scale_fill_gradient(low = "#F7FBFF", high = "#08519C", na.value = "white",
+                      name = "祭り数") +
+  scale_x_discrete(labels = function(x) str_wrap(x, 10)) +
+  scale_y_discrete(labels = function(x) str_wrap(x, 8)) +
+  labs(
+    title = "資源についての話題頻度 × 生産保全活動レベル",
+    subtitle = paste0("30祭り。Spearman相関 = ",
+                      round(cor(festival_engagement$topic_score, festival_engagement$mgmt_score,
+                                method = "spearman"), 2),
+                      "（ほぼ無相関）\n",
+                      "「よく話す」祭りが必ずしも「全面的な生産」ではない"),
+    x = "生産保全活動レベル", y = "話題頻度"
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid = element_blank())
+
+ggsave(file.path(OUTPUT_DIR, "27a_topic_x_management.png"), p27a,
+       width = 8.5, height = 6.3, dpi = 150)
+
+# --- 27b: 既出変数との関係 ---
+engagement_join <- festival_engagement %>%
+  left_join(embed_festival %>% select(festival, mean_embed), by = "festival") %>%
+  left_join(scale_df %>% select(festival, festival_type), by = "festival")
+
+cat("
+=== 府県別 平均スコア ===
+")
+print(as.data.frame(engagement_join %>% group_by(pref) %>%
+  summarise(n = n(), 話題平均 = round(mean(topic_score), 2),
+            管理活動平均 = round(mean(mgmt_score), 2), .groups = "drop")))
+
+cat("
+=== 祭りタイプ別 平均スコア ===
+")
+print(as.data.frame(engagement_join %>% group_by(festival_type) %>%
+  summarise(n = n(), 話題平均 = round(mean(topic_score), 2),
+            管理活動平均 = round(mean(mgmt_score), 2), .groups = "drop")))
+
+cat("
+=== 嵌入度との相関（Spearman）===
+")
+cat("話題 vs 嵌入度:", round(cor(engagement_join$topic_score, engagement_join$mean_embed,
+                              method = "spearman", use = "complete.obs"), 3), "
+")
+cat("管理活動 vs 嵌入度:", round(cor(engagement_join$mgmt_score, engagement_join$mean_embed,
+                                method = "spearman", use = "complete.obs"), 3), "
+")
+
+set.seed(20260903)
+p27b1 <- ggplot(engagement_join, aes(x = mgmt_score, y = mean_embed, color = pref)) +
+  geom_jitter(width = 0.12, height = 0, size = 2.8, alpha = 0.85) +
+  scale_x_continuous(breaks = 1:3, limits = c(0.6, 3.4)) +
+  scale_color_manual(values = PREF_PAL, name = "都道府県") +
+  labs(title = "管理活動 × 調達嵌入度", x = "管理活動レベル", y = "調達嵌入度（祭り平均）") +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(size = 10, face = "bold"), legend.position = "none")
+
+p27b2 <- ggplot(engagement_join, aes(x = topic_score, y = mean_embed, color = pref)) +
+  geom_jitter(width = 0.12, height = 0, size = 2.8, alpha = 0.85) +
+  scale_x_continuous(breaks = 1:4, limits = c(0.6, 4.4)) +
+  scale_color_manual(values = PREF_PAL, name = "都道府県") +
+  labs(title = "話題頻度 × 調達嵌入度", x = "話題頻度", y = "調達嵌入度（祭り平均）") +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(size = 10, face = "bold"))
+
+p27b3 <- ggplot(engagement_join, aes(x = festival_type, y = mgmt_score)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5, fill = "gray90") +
+  geom_jitter(aes(color = pref), width = 0.12, height = 0.05, size = 2.5, alpha = 0.85) +
+  scale_y_continuous(breaks = 1:3, limits = c(0.6, 3.4)) +
+  scale_color_manual(values = PREF_PAL, guide = "none") +
+  labs(title = "祭りタイプ別の管理活動レベル", x = NULL, y = "管理活動レベル") +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        axis.text.x = element_text(angle = 20, hjust = 1))
+
+p27b4 <- ggplot(engagement_join, aes(x = festival_type, y = topic_score)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5, fill = "gray90") +
+  geom_jitter(aes(color = pref), width = 0.12, height = 0.05, size = 2.5, alpha = 0.85) +
+  scale_y_continuous(breaks = 1:4, limits = c(0.6, 4.4)) +
+  scale_color_manual(values = PREF_PAL, name = "都道府県") +
+  labs(title = "祭りタイプ別の話題頻度", x = NULL, y = "話題頻度") +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 20, hjust = 1))
+
+p27b <- (p27b1 + p27b2) / (p27b3 + p27b4) +
+  patchwork::plot_layout(guides = "collect") +
+  patchwork::plot_annotation(
+    title = "話題頻度・管理活動レベルと、調達嵌入度・祭りタイプ・府県との関係",
+    subtitle = "色＝都道府県（左右2列で共通）。x軸はジッターで重なりを分散",
+    theme = theme(plot.title = element_text(face = "bold", family = "HiraginoSans-W3"),
+                  plot.subtitle = element_text(family = "HiraginoSans-W3"))
+  )
+
+ggsave(file.path(OUTPUT_DIR, "27b_topic_mgmt_vs_context.png"), p27b,
+       width = 11, height = 9, dpi = 150)
+
+write.csv(
+  engagement_join %>%
+    select(pref, festival, festival_type, topic_score, topic_label,
+           mgmt_score, mgmt_label, mean_embed),
+  file.path(OUTPUT_DIR, "topic_management_engagement.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
 
 # 図19は削除
 
