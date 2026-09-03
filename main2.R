@@ -380,6 +380,25 @@ mt3 <- read_matome(3) %>% rename(pref = 1, festival = 2) %>%
 
 # 府県マッピングを結果3から確定させる
 FESTIVAL_PREF <- setNames(mt3$pref, mt3$festival)
+
+# --- 結果3 の資源グループ（まとめ側の植物カテゴリー分類）-------------------
+# 結果3 は 祭り × 資源グループ10列 のワイド表で、各セルに実際の資源名が
+# 空白区切りで入っている。これを (祭り, 資源名) → グループ の対応表に展開し、
+# まとめ由来の植物カテゴリーとして使う。
+# 「加工・非植物資材」列は植物ではないため対象外。
+MATOME_TAXON_COLS <- c("稲・米・藁類", "麦・菜種類", "ヨシ・カヤ・ススキ類",
+                       "タケ・ササ類", "マツ類", "スギ・ヒノキ類",
+                       "その他樹木・柴類", "蔓・縄・繊維類", "その他植物・供物類")
+
+taxon_matome_map <- mt3 %>%
+  select(festival, all_of(MATOME_TAXON_COLS)) %>%
+  pivot_longer(-festival, names_to = "taxon_matome", values_to = "res_list") %>%
+  filter(!is.na(res_list), matome_clean(res_list) != "") %>%
+  mutate(res_list = matome_clean(res_list)) %>%
+  separate_rows(res_list, sep = "[[:space:]]+") %>%
+  filter(res_list != "") %>%
+  mutate(k = matome_key(res_list)) %>%
+  distinct(festival, k, taxon_matome)
 stopifnot(all(sheets %in% names(FESTIVAL_PREF)))
 stopifnot(all(FESTIVAL_PREF %in% PREF_ORDER))
 
@@ -414,7 +433,14 @@ resource_raw <- mt4 %>%
             by = c("festival", "k")) %>%
   left_join(mt5 %>% select(festival = festival_est, k, change_raw, landscape_raw),
             by = c("festival", "k")) %>%
+  left_join(taxon_matome_map, by = c("festival", "k")) %>%
   select(-k)
+
+.unmapped <- resource_raw %>% filter(is.na(taxon_matome))
+if (nrow(.unmapped) > 0) {
+  cat("結果3の資源グループに対応しない記録:", nrow(.unmapped), "件\n")
+  print(as.data.frame(.unmapped %>% select(festival, resource_raw)))
+}
 
 cat("資源レコード:", nrow(resource_raw), "件 /",
     n_distinct(resource_raw$festival), "祭り\n")
@@ -650,6 +676,21 @@ fest_design <- tibble(festival = sheets) %>%
 plant_festival <- resource_df %>%
   filter(!is.na(resource_taxon), resource_taxon != "非植物資材") %>%
   group_by(festival, resource_taxon) %>%
+  summarise(
+    n_parts      = n(),
+    parts        = paste(unique(resource_raw), collapse = " / "),
+    reason_types = {
+      ty <- unique(unlist(strsplit(na.omit(reason_types), "\\|")))
+      if (length(ty) == 0) NA_character_ else paste(sort(ty), collapse = "|")
+    },
+    .groups = "drop"
+  ) %>%
+  left_join(fest_design, by = "festival")
+
+# 祭り × まとめ資源グループ（結果3の分類。図17bで使う）
+plant_festival_mt <- resource_df %>%
+  filter(!is.na(taxon_matome)) %>%
+  group_by(festival, taxon_matome) %>%
   summarise(
     n_parts      = n(),
     parts        = paste(unique(resource_raw), collapse = " / "),
@@ -1710,30 +1751,40 @@ p17a <- reason_share %>%
 ggsave(file.path(OUTPUT_DIR, "17a_reason_types_overall.png"), p17a,
        width = 9, height = 6, dpi = 150)
 
-# --- 17b: 主要植物ごとの理由構成（ウェイト付き）-----------------------------
-major_taxa <- prev_tax %>% filter(raw_n >= 3) %>% pull(taxon)
+# --- 17b: 資源グループごとの理由構成（ウェイト付き）-------------------------
+# 【植物カテゴリーの出典】分析内容まとめ.xlsx 結果3 の資源グループ9列。
+#   スクリプト側の normalize_taxon() ではなく、まとめの分類をそのまま使う。
+#   ススキは結果3の時点で「ヨシ・カヤ・ススキ類」に含まれる。
+# 【選定理由】結果2「植物の選定理由（要点）」に code_reason() の10類型を適用。
 
-reason_by_taxon <- reason_long %>%
-  filter(resource_taxon %in% major_taxa) %>%
-  group_by(resource_taxon, rtype, rlabel) %>%
+reason_long_mt <- plant_festival_mt %>%
+  filter(!is.na(reason_types)) %>%
+  separate_rows(reason_types, sep = "\\|") %>%
+  rename(rtype = reason_types) %>%
+  mutate(rlabel = factor(unname(REASON_LABELS[rtype]), levels = unname(REASON_LABELS)))
+
+mt_denom <- plant_festival_mt %>%
+  filter(!is.na(reason_types)) %>%
+  group_by(taxon_matome) %>%
+  summarise(w_tot = sum(w), n_fes = n(), .groups = "drop")
+
+reason_by_taxon <- reason_long_mt %>%
+  group_by(taxon_matome, rtype, rlabel) %>%
   summarise(w_n = sum(w), .groups = "drop") %>%
-  left_join(
-    plant_festival %>%
-      filter(resource_taxon %in% major_taxa, !is.na(reason_types)) %>%
-      group_by(resource_taxon) %>%
-      summarise(w_tot = sum(w), n_fes = n(), .groups = "drop"),
-    by = "resource_taxon"
-  ) %>%
+  left_join(mt_denom, by = "taxon_matome") %>%
   mutate(share = w_n / w_tot,
-         taxon_label = paste0(resource_taxon, "（", n_fes, "祭り）"))
+         taxon_label = paste0(taxon_matome, "（", n_fes, "祭り）"))
 
-taxon_ord <- prev_tax %>% filter(raw_n >= 3) %>% arrange(w_prev) %>% pull(taxon)
+mt_order <- mt_denom %>% arrange(n_fes) %>% pull(taxon_matome)
 reason_by_taxon <- reason_by_taxon %>%
   mutate(taxon_label = factor(taxon_label,
-    levels = unique(taxon_label[order(match(resource_taxon, taxon_ord))])))
+    levels = unique(taxon_label[order(match(taxon_matome, mt_order))])))
+
+cat("\n=== 資源グループ（まとめ結果3）ごとの祭り数 ===\n")
+print(as.data.frame(mt_denom %>% arrange(desc(n_fes))))
 
 # 多重ラベルのため積み上げ棒だと合計が100%を超えて読みにくい。
-# 「その植物を使う祭りのうち、その理由を挙げた割合」をヒートマップで示す。
+# 「その資源グループを使う祭りのうち、その理由を挙げた割合」をヒートマップで示す。
 reason_grid <- expand_grid(
   taxon_label = levels(reason_by_taxon$taxon_label),
   rlabel      = factor(unname(REASON_LABELS), levels = unname(REASON_LABELS))
@@ -1742,9 +1793,8 @@ reason_grid <- expand_grid(
             by = c("taxon_label", "rlabel")) %>%
   mutate(share = ifelse(is.na(share), 0, share),
          taxon_label = factor(taxon_label, levels = levels(reason_by_taxon$taxon_label))) %>%
-  # 着色はその植物の「特徴的な理由」だけに絞る。
-  # 行（＝植物）ごとに10類型の割合の75%分位点を求め、それを上回るセルのみ着色する。
-  # 着色されないセルも数値は表示するので情報は落ちない。
+  # 着色はその資源グループの「特徴的な理由」だけに絞る。
+  # 行ごとに10類型の割合の75%分位点を求め、それを上回るセルのみ着色する。
   group_by(taxon_label) %>%
   mutate(q75 = quantile(share, 0.75, names = FALSE),
          share_plot = ifelse(share > q75, share, NA_real_)) %>%
@@ -1753,16 +1803,17 @@ reason_grid <- expand_grid(
 p17b <- ggplot(reason_grid, aes(x = rlabel, y = taxon_label, fill = share_plot)) +
   geom_tile(color = "white", linewidth = 0.5) +
   geom_text(aes(label = ifelse(share > 0, scales::percent(share, accuracy = 1), "")),
-            size = 2.7, family = "HiraginoSans-W3",
+            size = 2.8, family = "HiraginoSans-W3",
             color = ifelse(!is.na(reason_grid$share_plot) & reason_grid$share_plot > 0.5,
                            "white", "gray20")) +
   scale_fill_gradient(low = "#FDD8C0", high = "#B30000", na.value = "gray95",
                       labels = scales::percent, name = "その理由を挙げた割合") +
   labs(
-    title = "主要植物ごとの選定理由の構成",
-    subtitle = paste0("3祭り以上で使われた植物。セル＝その植物を使う祭りのうち\n",
-                      "その理由が語られた割合（行ごとの割合、府県ウェイト補正後）\n",
-                      "着色は行ごとの75%分位点を上回るセルのみ＝その植物に特徴的な理由\n",
+    title = "資源グループごとの選定理由の構成",
+    subtitle = paste0("資源グループは分析内容まとめ.xlsx 結果3 のコーディングによる\n",
+                      "セル＝そのグループを使う祭りのうちその理由が語られた割合",
+                      "（行ごとの割合、府県ウェイト補正後）\n",
+                      "着色は行ごとの75%分位点を上回るセルのみ＝そのグループに特徴的な理由\n",
                       "1単位が複数類型を持つため行の合計は100%を超える"),
     x = NULL, y = NULL
   ) +
