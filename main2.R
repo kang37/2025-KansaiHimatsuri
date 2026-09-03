@@ -2794,6 +2794,72 @@ write.csv(
   row.names = FALSE, fileEncoding = "UTF-8"
 )
 
+# ==============================================================================
+# 図26: 府県別 平均植物資源種数（祭りあたり）
+# ------------------------------------------------------------------------------
+# 【図25の点の大きさについての確認】
+# 図25の点の大きさ（植物資源種数）は各祭り自身の distinct(resource_taxon) で
+# あり、他の祭りと合算した合計値ではない（1点＝1祭り、他祭りの値は混じらない）。
+# 30祭り分を単純に足すと134になるが、これは図25では使っていない。
+# 「祭りあたりの平均」が意味を持つのは、複数の祭りを束ねる単位＝府県のレベル
+# であるため、ここでは府県ごとに（その県の祭りの植物資源種数の単純平均）を示す。
+#
+# 分類群（taxon）ベースと、部位を分けたまま数えた名称（resource_norm）ベースの
+# 両方を示す：がんがら火祭り・まんどろ火祭りは複数の資源が同じ分類群（マツ・
+# イネ）に集約されるため、分類群ベースだと種数が少なく出る（例：がんがら
+# 火祭りは taxon=3 だが norm=6）。この差が大きい祭りが多い府県では、2本の
+# 棒の差も大きくなる。
+# ------------------------------------------------------------------------------
+
+div_by_pref <- resource_df %>%
+  group_by(festival) %>%
+  summarise(n_taxon = n_distinct(resource_taxon),
+            n_norm  = n_distinct(resource_norm), .groups = "drop") %>%
+  mutate(pref = factor(unname(FESTIVAL_PREF[festival]), levels = PREF_ORDER)) %>%
+  group_by(pref) %>%
+  summarise(n_festivals = n(),
+            mean_taxon = mean(n_taxon), mean_norm = mean(n_norm),
+            .groups = "drop") %>%
+  arrange(desc(mean_taxon))
+
+cat("
+=== 府県別 平均植物資源種数（祭りあたり） ===
+")
+print(as.data.frame(div_by_pref %>%
+  mutate(mean_taxon = round(mean_taxon, 2), mean_norm = round(mean_norm, 2))))
+
+p26 <- div_by_pref %>%
+  mutate(pref = factor(pref, levels = rev(div_by_pref$pref))) %>%
+  pivot_longer(c(mean_taxon, mean_norm), names_to = "kind", values_to = "value") %>%
+  mutate(kind = factor(kind, levels = c("mean_norm", "mean_taxon"),
+                       labels = c("資源名ベース（部位を分けたまま）",
+                                  "分類群ベース（図01・図25で使用）"))) %>%
+  ggplot(aes(x = value, y = pref, fill = kind)) +
+  geom_col(position = position_dodge(width = 0.72), width = 0.65, alpha = 0.9) +
+  geom_text(aes(label = sprintf("%.1f", value)),
+            position = position_dodge(width = 0.72), hjust = -0.2, size = 3,
+            family = "HiraginoSans-W3") +
+  geom_text(data = div_by_pref %>% mutate(pref = factor(pref, levels = rev(div_by_pref$pref))),
+            aes(x = -0.4, y = pref, label = paste0("n=", n_festivals)),
+            inherit.aes = FALSE, size = 2.8, color = "gray40", hjust = 1) +
+  scale_fill_manual(values = c("#BDBDBD", "#08519C"), name = NULL) +
+  scale_x_continuous(limits = c(-1.2, 6.5), breaks = 0:6) +
+  labs(
+    title = "府県別 平均植物資源種数（祭りあたり）",
+    subtitle = "県内の祭りごとの植物資源種数を単純平均。左端の n= はその県の祭り数",
+    x = "祭りあたりの平均植物資源種数", y = NULL
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = "bottom",
+        panel.grid.major.y = element_blank())
+
+ggsave(file.path(OUTPUT_DIR, "26_mean_resources_by_pref.png"), p26,
+       width = 8.5, height = 4.5, dpi = 150)
+
+write.csv(div_by_pref, file.path(OUTPUT_DIR, "mean_resources_by_pref.csv"),
+          row.names = FALSE, fileEncoding = "UTF-8")
+
 # 図19は削除
 
 # ==============================================================================
