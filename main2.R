@@ -1911,106 +1911,88 @@ ggsave(file.path(OUTPUT_DIR, "19a_use_types_overall.png"), p19a,
 # ------------------------------------------------------------------------------
 # 図19b: 利用方法 × 選定理由
 # ------------------------------------------------------------------------------
-# セル = P(その理由 | その機能群)：その機能で使われる記録のうち、その理由が
-#        語られた割合（府県ウェイト補正後）
-# 色   = リフト値 log2( P(理由|機能) / P(理由) )
-#        正（赤）＝その機能に特に結び付く理由、負（青）＝結び付きにくい理由
-#        独立なら 0。多重ラベルでも定義できる指標なのでここで用いる。
+# 【利用方法の分類】分析内容まとめ.xlsx 結果2 の【 】カテゴリーをそのまま行に
+#   使う（スクリプト側の機能グループ USE_GROUPS は使わない）。
+#   記録数5件未満のカテゴリーは割合が不安定なため除外する。
+# 【選定理由】結果2「選定理由（要点）」に code_reason() の10類型を適用。
+# セル = P(その理由 | その利用方法)：その利用方法で使われる記録のうち、
+#        その理由が語られた割合（府県ウェイト補正後）。色もこの割合。
 # ------------------------------------------------------------------------------
 
-ur <- use_long %>%
-  filter(!is.na(reason_types)) %>%
-  distinct(festival, resource_raw, use_group, reason_types, w) %>%
-  separate_rows(reason_types, sep = "\\|") %>%
-  rename(rtype = reason_types)
+USE_MIN_N <- 5
 
-# 機能群ごとの重み付き記録数
-ur_denom <- use_long %>%
+use_cat_denom <- use_long %>%
   filter(!is.na(reason_types)) %>%
-  distinct(festival, resource_raw, use_group, w) %>%
-  group_by(use_group) %>%
+  distinct(festival, resource_raw, use_cat, w) %>%
+  group_by(use_cat) %>%
   summarise(w_tot = sum(w), n_rec = n(), .groups = "drop")
 
-# 全体の理由シェア（周辺分布）
-ur_all <- resource_df %>%
-  filter(!is.na(reason_types), !is.na(use_types)) %>%
-  left_join(fest_design %>% select(festival, w), by = "festival")
-w_all <- sum(ur_all$w)
-reason_marginal <- ur_all %>%
-  separate_rows(reason_types, sep = "\\|") %>%
-  group_by(rtype = reason_types) %>%
-  summarise(p_all = sum(w) / w_all, .groups = "drop")
+cat("\n=== 図19bから除外した利用方法（記録数", USE_MIN_N, "件未満）===\n")
+print(as.data.frame(use_cat_denom %>% filter(n_rec < USE_MIN_N) %>% arrange(desc(n_rec))))
 
-use_reason <- ur %>%
-  group_by(use_group, rtype) %>%
+use_cat_keep <- use_cat_denom %>% filter(n_rec >= USE_MIN_N)
+
+use_reason <- use_long %>%
+  filter(!is.na(reason_types), use_cat %in% use_cat_keep$use_cat) %>%
+  distinct(festival, resource_raw, use_cat, reason_types, w) %>%
+  separate_rows(reason_types, sep = "\\|") %>%
+  rename(rtype = reason_types) %>%
+  group_by(use_cat, rtype) %>%
   summarise(raw_n = n(), w_n = sum(w), .groups = "drop") %>%
-  right_join(expand_grid(use_group = factor(USE_GROUP_ORDER, levels = USE_GROUP_ORDER),
+  right_join(expand_grid(use_cat = use_cat_keep$use_cat,
                          rtype = names(REASON_LABELS)),
-             by = c("use_group", "rtype")) %>%
+             by = c("use_cat", "rtype")) %>%
   mutate(raw_n = replace_na(raw_n, 0L), w_n = replace_na(w_n, 0)) %>%
-  left_join(ur_denom, by = "use_group") %>%
-  left_join(reason_marginal, by = "rtype") %>%
+  left_join(use_cat_keep, by = "use_cat") %>%
   mutate(
     p_cond = w_n / w_tot,
-    lift   = ifelse(p_all > 0 & p_cond > 0, log2(p_cond / p_all), NA_real_),
     rlabel = factor(unname(REASON_LABELS[rtype]), levels = unname(REASON_LABELS)),
-    group_label = paste0(use_group, "\n(n=", n_rec, ")")
+    use_label = paste0(use_cat, "（", n_rec, "件）")
   )
+
+use_ord <- use_cat_keep %>% arrange(n_rec) %>% pull(use_cat)
 use_reason <- use_reason %>%
-  mutate(group_label = factor(group_label,
-    levels = unique(group_label[order(match(use_group, rev(USE_GROUP_ORDER)))])))
+  mutate(use_label = factor(use_label,
+    levels = unique(use_label[order(match(use_cat, use_ord))])))
 
-cat("\n=== 利用方法 × 選定理由：条件付き割合 P(理由|機能群) ===\n")
+cat("\n=== 利用方法 × 選定理由：P(理由|利用方法) ===\n")
 print(as.data.frame(
-  use_reason %>% select(use_group, rlabel, raw_n, p_cond) %>%
+  use_reason %>% select(use_cat, n_rec, rlabel, p_cond) %>%
     mutate(p_cond = round(p_cond, 2)) %>%
-    pivot_wider(names_from = rlabel, values_from = c(raw_n, p_cond)) %>%
-    select(use_group, starts_with("p_cond"))
-))
-cat("\n=== リフト（log2）の上位・下位 ===\n")
-print(as.data.frame(
-  use_reason %>% filter(raw_n >= 3) %>% arrange(desc(lift)) %>%
-    transmute(機能群 = use_group, 理由 = rlabel, 件数 = raw_n,
-              条件付割合 = round(p_cond, 2), 全体割合 = round(p_all, 2),
-              リフト = round(lift, 2)) %>%
-    slice(c(1:8, (n()-7):n()))
+    pivot_wider(names_from = rlabel, values_from = p_cond) %>%
+    arrange(desc(n_rec))
 ))
 
-# 実件数3件未満のセルはリフトが不安定なため着色しない（数値は表示する）
-use_reason <- use_reason %>% mutate(lift_plot = ifelse(raw_n >= 3, lift, NA_real_))
-
-p19b <- ggplot(use_reason, aes(x = rlabel, y = group_label, fill = lift_plot)) +
+p19b <- ggplot(use_reason, aes(x = rlabel, y = use_label, fill = p_cond)) +
   geom_tile(color = "white", linewidth = 0.5) +
-  geom_text(aes(label = ifelse(raw_n > 0,
-                               paste0(scales::percent(p_cond, accuracy = 1),
-                                      "\n", raw_n, "件"), "")),
-            size = 2.5, lineheight = 0.9, family = "HiraginoSans-W3",
-            color = "gray15") +
-  scale_fill_gradient2(low = "#2166AC", mid = "#F7F7F7", high = "#B2182B",
-                       midpoint = 0, na.value = "gray92",
-                       name = "特化度 log2(条件付割合 / 全体割合)") +
+  geom_text(aes(label = ifelse(p_cond > 0,
+                               scales::percent(p_cond, accuracy = 1), "")),
+            size = 2.8, family = "HiraginoSans-W3",
+            color = ifelse(use_reason$p_cond > 0.55, "white", "gray20")) +
+  scale_fill_gradient(low = "#FFF7EC", high = "#B30000",
+                      labels = scales::percent, name = "その理由を挙げた割合") +
   labs(
     title = "利用方法と選定理由の関係",
-    subtitle = paste0("セル上段＝その機能で使われる記録のうちその理由が語られた割合",
-                      "（府県ウェイト補正後）、下段＝実件数\n",
-                      "色＝全体の理由分布と比べた特化度。赤＝その機能に特に結び付く理由、",
-                      "青＝結び付きにくい理由。実件数3件未満のセルは不安定なため無着色"),
+    subtitle = paste0("利用方法は分析内容まとめ.xlsx 結果2 のカテゴリー",
+                      "（記録数", USE_MIN_N, "件未満は除外）\n",
+                      "セル＝その利用方法で使われる記録のうちその理由が語られた割合",
+                      "（行ごとの割合、府県ウェイト補正後）\n",
+                      "1記録が複数の理由を持つため行の合計は100%を超える"),
     x = NULL, y = NULL
   ) +
   theme_bw(base_family = "HiraginoSans-W3") +
   theme(plot.title = element_text(face = "bold"),
         panel.grid = element_blank(),
         axis.text.x = element_text(angle = 30, hjust = 1),
-        legend.position = "bottom",
-        legend.key.width = unit(1.4, "cm"))
+        legend.position = "bottom")
 
 ggsave(file.path(OUTPUT_DIR, "19b_use_x_reason.png"), p19b,
-       width = 11, height = 6.5, dpi = 150)
+       width = 10, height = 6, dpi = 150)
 
 write.csv(use_share, file.path(OUTPUT_DIR, "use_type_share.csv"),
           row.names = FALSE, fileEncoding = "UTF-8")
 write.csv(
-  use_reason %>% select(use_group, n_rec, rtype, rlabel, raw_n, w_n, p_cond, p_all, lift),
+  use_reason %>% select(use_cat, n_rec, rtype, rlabel, raw_n, w_n, p_cond),
   file.path(OUTPUT_DIR, "use_x_reason.csv"),
   row.names = FALSE, fileEncoding = "UTF-8"
 )
