@@ -2740,6 +2740,60 @@ write.csv(
   row.names = FALSE, fileEncoding = "UTF-8"
 )
 
+# ==============================================================================
+# 図25: 関係者数 × 観光客数 × 植物資源種数 × 府県
+# ------------------------------------------------------------------------------
+# 図10（2×2祭りタイプで色分け）と同じ scale_df を使うが、色を府県に差し替える。
+# x = 関係者数　y = 観光客数　点の大きさ = 植物資源種数　色 = 都道府県
+# ------------------------------------------------------------------------------
+
+PREF_PAL <- c(
+  "滋賀県"   = "#1B9E77",
+  "京都府"   = "#D95F02",
+  "大阪府"   = "#7570B3",
+  "兵庫県"   = "#E7298A",
+  "奈良県"   = "#66A61E",
+  "和歌山県" = "#E6AB02"
+)
+
+scale_df_pref <- scale_df %>%
+  mutate(pref = factor(unname(FESTIVAL_PREF[festival]), levels = PREF_ORDER)) %>%
+  filter(!is.na(tourists))
+
+p25 <- ggplot(scale_df_pref, aes(x = participants, y = tourists + 1)) +
+  geom_vline(xintercept = 200, linetype = "dashed", color = "gray75", linewidth = 0.5) +
+  geom_hline(yintercept = 1001, linetype = "dashed", color = "gray75", linewidth = 0.5) +
+  geom_point(aes(color = pref, size = n_resources), alpha = 0.85) +
+  geom_text_repel(aes(label = festival), size = 2.7, max.overlaps = 25,
+                  family = "HiraginoSans-W3") +
+  scale_x_continuous(transform = "log10", labels = scales::comma,
+                     breaks = c(10, 30, 100, 200, 500, 1000, 2000)) +
+  scale_y_continuous(transform = "log10",
+                     breaks = c(1, 10, 100, 1000, 10000, 100000, 1000000),
+                     labels = c("0", "10", "100", "1千", "1万", "10万", "100万")) +
+  scale_color_manual(values = PREF_PAL, name = "都道府県") +
+  scale_size_continuous(range = c(2.5, 9), name = "植物資源種数") +
+  labs(
+    title = "関係者数 × 観光客数 × 植物資源種数 × 都道府県",
+    subtitle = paste0("点の大きさ＝植物資源種数、色＝都道府県　",
+                      "縦破線: 関係者数200人、横破線: 観光客1000人（図10と同じ目安線）"),
+    x = "祭り関係者数（人）[対数]",
+    y = "観光客数（人）[対数]",
+    caption = "雄琴学区ヨシ松明一斉点火・熊野速玉大社は観光客数不明のため除外"
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = "right")
+
+ggsave(file.path(OUTPUT_DIR, "25_scale_x_tourists_x_resources_x_pref.png"), p25,
+       width = 11, height = 7.5, dpi = 150)
+
+write.csv(
+  scale_df_pref %>% select(pref, festival, participants, tourists, n_resources),
+  file.path(OUTPUT_DIR, "scale_x_tourists_x_resources_x_pref.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
+
 # 図19は削除
 
 # ==============================================================================
