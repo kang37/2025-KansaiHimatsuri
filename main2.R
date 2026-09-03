@@ -483,6 +483,21 @@ code_use <- function(x) {
   }, character(1), USE.NAMES = FALSE)
 }
 
+# 利用方法18分類の機能グループ（クロス分析でセル数を確保するため）
+#   結果2 の【 】は18カテゴリーに細分されているが、n<5 のものが多い。
+#   松明内での機能を基準に6群へまとめる。詳細分類は use_types に保持。
+USE_GROUPS <- c(
+  "主要燃焼材" = "燃焼材系", "燃焼材" = "燃焼材系", "着火材" = "燃焼材系",
+  "構造材" = "構造材系", "芯棒" = "構造材系", "充填材" = "構造材系",
+  "補強材" = "構造材系", "担ぎ棒" = "構造材系",
+  "化粧材" = "化粧・装飾系", "装飾材" = "化粧・装飾系", "造形材" = "化粧・装飾系",
+  "結束材" = "結束材",
+  "祭具材" = "祭具・供物系", "供物" = "祭具・供物系", "装束材" = "祭具・供物系",
+  "発煙材" = "その他機能", "防火材" = "その他機能", "非祭具" = "その他機能"
+)
+USE_GROUP_ORDER <- c("燃焼材系", "構造材系", "化粧・装飾系", "結束材",
+                     "祭具・供物系", "その他機能")
+
 # 利用の位置づけ：現行 / 旧来 / 代替材 / 代替試行・不採用 / 推定
 code_use_status <- function(x) {
   cs <- bracket_cat(x)
@@ -1752,6 +1767,183 @@ write.csv(
 )
 
 # ==============================================================================
+# 図19a: 利用方法カテゴリーの分布
+# 図19b: 利用方法 × 選定理由 の関連
+# ------------------------------------------------------------------------------
+# 【解析単位】 資源レコード（祭り × 資源名。部位を分けたまま扱う）
+#   利用方法は部位ごとに異なる（ヒノキの丸太＝構造材／ヒノキの葉＝装飾材）ため、
+#   図03・図17のような分類群への集約はせず、記録のまま扱う。
+#   利用方法・選定理由ともに多重ラベル（1記録が複数カテゴリーを持つ）。
+# 【ウェイト】 図03・図17と同じ府県事後層化ウェイトを適用する。
+# ==============================================================================
+
+use_long <- resource_df %>%
+  filter(!is.na(use_types)) %>%
+  left_join(fest_design %>% select(festival, pref, w), by = "festival") %>%
+  separate_rows(use_types, sep = "\\|") %>%
+  filter(use_types != "") %>%
+  rename(use_cat = use_types) %>%
+  mutate(use_group = factor(unname(USE_GROUPS[use_cat]), levels = USE_GROUP_ORDER))
+
+if (any(is.na(use_long$use_group)))
+  warning("グループ未登録の利用方法: ",
+          paste(unique(use_long$use_cat[is.na(use_long$use_group)]), collapse = ", "))
+
+n_rec_use <- n_distinct(paste(use_long$festival, use_long$resource_raw))
+w_rec_use <- resource_df %>% filter(!is.na(use_types)) %>%
+  left_join(fest_design %>% select(festival, w), by = "festival") %>% pull(w) %>% sum()
+
+use_share <- use_long %>%
+  distinct(festival, resource_raw, use_cat, use_group, w) %>%
+  group_by(use_group, use_cat) %>%
+  summarise(raw_n = n(), w_n = sum(w), .groups = "drop") %>%
+  mutate(raw_share = raw_n / n_rec_use, w_share = w_n / w_rec_use)
+
+cat("\n=== 利用方法カテゴリーの分布（資源レコード", n_rec_use, "件）===\n")
+print(as.data.frame(use_share %>% arrange(use_group, desc(w_share)) %>%
+  transmute(機能群 = use_group, 分類 = use_cat, 件数 = raw_n,
+            素のシェア = round(raw_share, 3), 補正シェア = round(w_share, 3))))
+cat("\n=== 利用の位置づけ ===\n")
+print(table(resource_df$use_status, useNA = "ifany"))
+
+p19a <- use_share %>%
+  mutate(use_cat = fct_reorder(use_cat, w_share)) %>%
+  select(use_group, use_cat, raw_share, w_share) %>%
+  pivot_longer(c(raw_share, w_share), names_to = "kind", values_to = "share") %>%
+  mutate(kind = factor(kind, levels = c("raw_share", "w_share"),
+                       labels = c("素のシェア", "府県ウェイト補正後"))) %>%
+  ggplot(aes(x = share, y = use_cat, fill = kind)) +
+  geom_col(position = position_dodge(width = 0.72), width = 0.68, alpha = 0.9) +
+  geom_text(aes(label = scales::percent(share, accuracy = 1)),
+            position = position_dodge(width = 0.72), hjust = -0.15, size = 2.6,
+            family = "HiraginoSans-W3") +
+  facet_grid(use_group ~ ., scales = "free_y", space = "free_y") +
+  scale_fill_manual(values = c("#BDBDBD", "#08519C"), name = NULL) +
+  scale_x_continuous(labels = scales::percent, limits = c(0, 0.40)) +
+  labs(
+    title = "松明の中で植物が担う役割（利用方法）",
+    subtitle = paste0("解析単位＝資源レコード（祭り×資源名、部位を分けたまま） n = ",
+                      n_rec_use, "\n",
+                      "1記録が複数の役割を持つため合計は100%を超える"),
+    x = "その役割で使われた記録の割合", y = NULL
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = "bottom",
+        panel.grid.major.y = element_blank(),
+        strip.text.y = element_text(angle = 0))
+
+ggsave(file.path(OUTPUT_DIR, "19a_use_types_overall.png"), p19a,
+       width = 9.5, height = 8, dpi = 150)
+
+# ------------------------------------------------------------------------------
+# 図19b: 利用方法 × 選定理由
+# ------------------------------------------------------------------------------
+# セル = P(その理由 | その機能群)：その機能で使われる記録のうち、その理由が
+#        語られた割合（府県ウェイト補正後）
+# 色   = リフト値 log2( P(理由|機能) / P(理由) )
+#        正（赤）＝その機能に特に結び付く理由、負（青）＝結び付きにくい理由
+#        独立なら 0。多重ラベルでも定義できる指標なのでここで用いる。
+# ------------------------------------------------------------------------------
+
+ur <- use_long %>%
+  filter(!is.na(reason_types)) %>%
+  distinct(festival, resource_raw, use_group, reason_types, w) %>%
+  separate_rows(reason_types, sep = "\\|") %>%
+  rename(rtype = reason_types)
+
+# 機能群ごとの重み付き記録数
+ur_denom <- use_long %>%
+  filter(!is.na(reason_types)) %>%
+  distinct(festival, resource_raw, use_group, w) %>%
+  group_by(use_group) %>%
+  summarise(w_tot = sum(w), n_rec = n(), .groups = "drop")
+
+# 全体の理由シェア（周辺分布）
+ur_all <- resource_df %>%
+  filter(!is.na(reason_types), !is.na(use_types)) %>%
+  left_join(fest_design %>% select(festival, w), by = "festival")
+w_all <- sum(ur_all$w)
+reason_marginal <- ur_all %>%
+  separate_rows(reason_types, sep = "\\|") %>%
+  group_by(rtype = reason_types) %>%
+  summarise(p_all = sum(w) / w_all, .groups = "drop")
+
+use_reason <- ur %>%
+  group_by(use_group, rtype) %>%
+  summarise(raw_n = n(), w_n = sum(w), .groups = "drop") %>%
+  right_join(expand_grid(use_group = factor(USE_GROUP_ORDER, levels = USE_GROUP_ORDER),
+                         rtype = names(REASON_LABELS)),
+             by = c("use_group", "rtype")) %>%
+  mutate(raw_n = replace_na(raw_n, 0L), w_n = replace_na(w_n, 0)) %>%
+  left_join(ur_denom, by = "use_group") %>%
+  left_join(reason_marginal, by = "rtype") %>%
+  mutate(
+    p_cond = w_n / w_tot,
+    lift   = ifelse(p_all > 0 & p_cond > 0, log2(p_cond / p_all), NA_real_),
+    rlabel = factor(unname(REASON_LABELS[rtype]), levels = unname(REASON_LABELS)),
+    group_label = paste0(use_group, "\n(n=", n_rec, ")")
+  )
+use_reason <- use_reason %>%
+  mutate(group_label = factor(group_label,
+    levels = unique(group_label[order(match(use_group, rev(USE_GROUP_ORDER)))])))
+
+cat("\n=== 利用方法 × 選定理由：条件付き割合 P(理由|機能群) ===\n")
+print(as.data.frame(
+  use_reason %>% select(use_group, rlabel, raw_n, p_cond) %>%
+    mutate(p_cond = round(p_cond, 2)) %>%
+    pivot_wider(names_from = rlabel, values_from = c(raw_n, p_cond)) %>%
+    select(use_group, starts_with("p_cond"))
+))
+cat("\n=== リフト（log2）の上位・下位 ===\n")
+print(as.data.frame(
+  use_reason %>% filter(raw_n >= 3) %>% arrange(desc(lift)) %>%
+    transmute(機能群 = use_group, 理由 = rlabel, 件数 = raw_n,
+              条件付割合 = round(p_cond, 2), 全体割合 = round(p_all, 2),
+              リフト = round(lift, 2)) %>%
+    slice(c(1:8, (n()-7):n()))
+))
+
+# 実件数3件未満のセルはリフトが不安定なため着色しない（数値は表示する）
+use_reason <- use_reason %>% mutate(lift_plot = ifelse(raw_n >= 3, lift, NA_real_))
+
+p19b <- ggplot(use_reason, aes(x = rlabel, y = group_label, fill = lift_plot)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = ifelse(raw_n > 0,
+                               paste0(scales::percent(p_cond, accuracy = 1),
+                                      "\n", raw_n, "件"), "")),
+            size = 2.5, lineheight = 0.9, family = "HiraginoSans-W3",
+            color = "gray15") +
+  scale_fill_gradient2(low = "#2166AC", mid = "#F7F7F7", high = "#B2182B",
+                       midpoint = 0, na.value = "gray92",
+                       name = "特化度 log2(条件付割合 / 全体割合)") +
+  labs(
+    title = "利用方法と選定理由の関係",
+    subtitle = paste0("セル上段＝その機能で使われる記録のうちその理由が語られた割合",
+                      "（府県ウェイト補正後）、下段＝実件数\n",
+                      "色＝全体の理由分布と比べた特化度。赤＝その機能に特に結び付く理由、",
+                      "青＝結び付きにくい理由。実件数3件未満のセルは不安定なため無着色"),
+    x = NULL, y = NULL
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 30, hjust = 1),
+        legend.position = "bottom",
+        legend.key.width = unit(1.4, "cm"))
+
+ggsave(file.path(OUTPUT_DIR, "19b_use_x_reason.png"), p19b,
+       width = 11, height = 6.5, dpi = 150)
+
+write.csv(use_share, file.path(OUTPUT_DIR, "use_type_share.csv"),
+          row.names = FALSE, fileEncoding = "UTF-8")
+write.csv(
+  use_reason %>% select(use_group, n_rec, rtype, rlabel, raw_n, w_n, p_cond, p_all, lift),
+  file.path(OUTPUT_DIR, "use_x_reason.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
+
+# ==============================================================================
 # 図20: 利用方法カテゴリー × 代替可能性
 #   松明内での植物の役割（燃焼材・構造材・化粧材・装飾材・結束材など）ごとに
 #   代替可能性スコアの分布を積み上げ比率バーで示す。
@@ -1770,8 +1962,9 @@ use_subst_df <- resource_df %>%
   tidyr::unnest(use_split) %>%
   filter(use_split != "", use_split != "その他") %>%
   mutate(
-    use_label  = factor(use_split,
-                        levels = c("燃焼材","構造材","化粧材","装飾材","結束材","食材")),
+    # 2026-09-03: まとめ移行で利用方法が18分類になったため、旧6分類の
+    # レベル指定では大半の記録が落ちていた。機能グループに差し替える。
+    use_label  = factor(unname(USE_GROUPS[use_split]), levels = USE_GROUP_ORDER),
     subst_label = factor(subst_score, levels = 1:3,
                          labels = c("代替可（1）", "代替困難（2）", "代替不可（3）"))
   ) %>%
