@@ -554,6 +554,22 @@ code_use_status <- function(x) {
 LANDSCAPE_VOCAB <- c("二次林", "人工林", "竹林", "神社林", "海岸防災林", "庭園",
                      "水田", "湿地", "畑", "荒地", "木材流通")
 
+# 景観タイプの配色（図18・図24で共有）。系統でまとめる：
+# 森林系＝緑の階調、水系＝青、畑＝橙、荒地＝灰、庭園＝桃、木材流通＝茶
+LANDSCAPE_PAL <- c(
+  "二次林"     = "#238B45",
+  "人工林"     = "#74C476",
+  "竹林"       = "#A1D99B",
+  "神社林"     = "#00441B",
+  "海岸防災林" = "#66C2A4",
+  "水田"       = "#3182BD",
+  "湿地"       = "#6BAED6",
+  "畑"         = "#FD8D3C",
+  "荒地"       = "#969696",
+  "庭園"       = "#DE77AE",
+  "木材流通"   = "#8C6D31"
+)
+
 code_landscape <- function(x) {
   vapply(as.character(x), function(z) {
     if (is.na(z)) return(NA_character_)
@@ -2581,11 +2597,12 @@ edge_df <- habitat_net %>%
   left_join(node_df %>% filter(type == "festival") %>%
               select(name, y_fest = y), by = c("festival" = "name"))
 
-hab_colors_net <- c(
-  "水田" = "#74C476", "湿地" = "#6BAED6",
-  "森林" = "#31A354", "畑"   = "#FD8D3C",
-  "荒地" = "#969696", "庭"   = "#BCBDDC"
-)
+# 2026-09-03: まとめ移行で景観カテゴリーが6種（森林/水田/湿地/畑/荒地/庭）
+# から11種（二次林・人工林・竹林・神社林・海岸防災林 等に細分）に変わった際、
+# この配色が更新されておらず、竹林(19件)・二次林(16件)・人工林(15件)という
+# 最頻カテゴリーが無配色（デフォルトのNA色）になっていた。LANDSCAPE_PAL に
+# 差し替える。
+hab_colors_net <- LANDSCAPE_PAL
 
 p18_network <- ggplot() +
   geom_segment(data = edge_df,
@@ -2615,11 +2632,113 @@ p18_network <- ggplot() +
     subtitle = "線 = その生息地タイプの植物を使用する関係"
   ) +
   theme_void(base_family = "HiraginoSans-W3") +
-  theme(plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+  # theme_void() は rect = element_blank() を含むため plot.background も透明になり、
+  # ビューアによっては透明部分が黒く表示されて黒文字（デフォルト色）のラベルや
+  # タイトルが見えなくなる。明示的に白背景を戻す。
+  theme(plot.background = element_rect(fill = "white", color = NA),
+        plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
         plot.subtitle = element_text(size = 9, hjust = 0.5, color = "gray40"))
 
 ggsave(file.path(OUTPUT_DIR, "18_habitat_dependency_network.png"), p18_network,
        width = 11, height = 9, dpi = 150)
+
+# ==============================================================================
+# 図24: 植物 × 調達地の生態景観類型
+# ------------------------------------------------------------------------------
+# 24a 総合図：全30祭りを合わせた 植物×景観タイプ のヒートマップ
+# 24b 府県別小図：同じヒートマップを府県ごとに分割（facet）
+#
+# 【解析単位】資源レコード（祭り×資源名）。1レコードが複数の景観に由来する
+# 場合（例：「湿地|荒地」）は両方に计上する（図12・図18と同じ landscape_all
+# の展開方式）。「なし」（景観不明）は除外。
+# 【色】件数（カウント）の連続グラデーション。図23の調達方法（3分類・
+# 自給↔購入という順序尺度）とは異なり、景観タイプに優劣の順序はないため、
+# 発散配色ではなく単色系の濃淡（多いほど濃い青）を使う。府県ウェイトは
+# 適用しない（観測された標本の記述）。
+# ------------------------------------------------------------------------------
+
+landscape_records <- resource_df %>%
+  filter(!is.na(resource_taxon), resource_taxon != "非植物資材",
+         !is.na(landscape_all), landscape_all != "なし") %>%
+  select(-landscape_norm) %>%
+  separate_rows(landscape_all, sep = "\\|") %>%
+  rename(landscape_type = landscape_all) %>%
+  mutate(pref = unname(FESTIVAL_PREF[festival]))
+
+taxon_order_24 <- landscape_records %>% count(resource_taxon, sort = TRUE) %>% pull(resource_taxon)
+land_order_24  <- landscape_records %>% count(landscape_type, sort = TRUE) %>% pull(landscape_type)
+
+cat("
+=== 図24 対象レコード:", nrow(landscape_records), "件（",
+    n_distinct(paste(landscape_records$festival, landscape_records$resource_raw)),
+    "件の資源レコードが複数景観のため展開）===
+")
+
+# --- 24a: 総合図 ---
+mat_24a <- landscape_records %>%
+  count(resource_taxon, landscape_type) %>%
+  mutate(resource_taxon = factor(resource_taxon, levels = rev(taxon_order_24)),
+         landscape_type = factor(landscape_type, levels = land_order_24))
+
+p24a <- ggplot(mat_24a, aes(x = landscape_type, y = resource_taxon, fill = n)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = n), size = 2.8, family = "HiraginoSans-W3", color = "gray15") +
+  scale_fill_gradient(low = "#F7FBFF", high = "#08519C", na.value = "white",
+                      name = "レコード数") +
+  labs(
+    title = "植物 × 調達地の生態景観類型（総合）",
+    subtitle = paste0("全30祭り、資源レコード", n_distinct(paste(landscape_records$festival, landscape_records$resource_raw)),
+                      "件。複数景観に由来する記録は両方に計上（合計は資源レコード数を超える）"),
+    x = NULL, y = NULL
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 30, hjust = 1))
+
+ggsave(file.path(OUTPUT_DIR, "24a_plant_x_landscape.png"), p24a,
+       width = 9, height = max(6, n_distinct(mat_24a$resource_taxon) * 0.33), dpi = 150)
+
+# --- 24b: 府県別小図 ---
+# 全パネルで植物・景観の並び順を24aと統一する（比較のため）。
+# セルが1件も無い府県×植物×景観の組み合わせは白のまま（0件ではなく描画しない）。
+mat_24b <- landscape_records %>%
+  count(pref, resource_taxon, landscape_type) %>%
+  mutate(pref = factor(pref, levels = PREF_ORDER),
+         resource_taxon = factor(resource_taxon, levels = rev(taxon_order_24)),
+         landscape_type = factor(landscape_type, levels = land_order_24))
+
+p24b <- ggplot(mat_24b, aes(x = landscape_type, y = resource_taxon, fill = n)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n), size = 2.3, family = "HiraginoSans-W3", color = "gray15") +
+  facet_wrap(~ pref, ncol = 3) +
+  scale_fill_gradient(low = "#F7FBFF", high = "#08519C", na.value = "white",
+                      name = "レコード数") +
+  labs(
+    title = "植物 × 調達地の生態景観類型（府県別）",
+    subtitle = "植物・景観の並び順は24aと共通。府県ウェイトなし（観測された標本の記述、府県間で総数が異なる点に注意）",
+    x = NULL, y = NULL
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid = element_blank(),
+        strip.text = element_text(size = 9),
+        axis.text.x = element_text(angle = 40, hjust = 1, size = 6.5),
+        axis.text.y = element_text(size = 6.5))
+
+ggsave(file.path(OUTPUT_DIR, "24b_plant_x_landscape_by_pref.png"), p24b,
+       width = 14, height = max(9, n_distinct(mat_24b$resource_taxon) * 0.42), dpi = 150)
+
+write.csv(
+  mat_24a %>% arrange(desc(n)),
+  file.path(OUTPUT_DIR, "plant_x_landscape.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
+write.csv(
+  mat_24b %>% arrange(pref, desc(n)),
+  file.path(OUTPUT_DIR, "plant_x_landscape_by_pref.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
 
 # 図19は削除
 
