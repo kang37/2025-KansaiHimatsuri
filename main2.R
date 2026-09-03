@@ -34,10 +34,92 @@ library(stringr)
 library(ggplot2)
 library(forcats)
 library(ggrepel)   # install.packages("ggrepel") if needed
+library(patchwork) # 図01の左右並置に使用
 
-DATA_PATH <- "data_raw/火祭の資源と組織調査結果.xlsx"
-OUTPUT_DIR <- "data_proc"
-dir.create(OUTPUT_DIR, showWarnings = FALSE)
+# 2026-09-02 更新：30シート版（新規16祭り追加）に切替
+# 旧: DATA_PATH <- "data_raw/火祭の資源と組織調査結果.xlsx"  (14シート, 出力先 data_proc/)
+DATA_PATH <- "data_raw/火祭の資源と組織調査結果_20260830.xlsx"
+OUTPUT_DIR <- "data_proc/20260902"
+dir.create(OUTPUT_DIR, showWarnings = FALSE, recursive = TRUE)
+
+# ------------------------------------------------------------------------------
+# 祭り所在府県（図の並び順のグループ化に使用）
+# ------------------------------------------------------------------------------
+# 出典：data_raw/近畿地方火祭り.xlsx（都道府県・市町村欄）および調査票の
+#       「関係社寺名」「氏子地域範囲」欄。順序は本研究の近畿圏の定義に合わせる。
+PREF_ORDER <- c("滋賀県", "京都府", "大阪府", "兵庫県", "奈良県", "和歌山県")
+
+FESTIVAL_PREF <- c(
+  # 滋賀県
+  "巽神社松明"               = "滋賀県",  # 近江八幡市糠塚町（奥石神社が祭礼に関与）
+  "松明を次世代に送る会"     = "滋賀県",  # 近江八幡市
+  "雄琴学区ヨシ松明一斉点火" = "滋賀県",  # 大津市雄琴学区
+  "太郎坊宮の火祭り"         = "滋賀県",  # 東近江市小脇町
+  "信楽の火祭り"             = "滋賀県",  # 甲賀市信楽町
+  "勝部の火祭り"             = "滋賀県",  # 守山市勝部町
+  "近江八幡左義長祭り"       = "滋賀県",  # 近江八幡市（日牟禮八幡宮）
+  "八幡祭り"                 = "滋賀県",  # 近江八幡市（日牟禮八幡宮）
+  "王の浜若宮神社"           = "滋賀県",  # 近江八幡市白王町王の浜
+  "小田神社"                 = "滋賀県",  # 近江八幡市北里学区
+  "大嶋奥津嶋神社"           = "滋賀県",  # 近江八幡市北津田町
+  # 京都府
+  "鞍馬の火祭"               = "京都府",  # 京都市左京区鞍馬
+  "三栖の火祭"               = "京都府",  # 京都市伏見区三栖
+  "大文字送り火"             = "京都府",  # 京都市左京区浄土寺
+  "嵯峨のお松明式"           = "京都府",  # 京都市右京区嵯峨（清凉寺）
+  "広河原松上げ"             = "京都府",  # 京都市左京区広河原
+  "花背松上げ"               = "京都府",  # 京都市左京区花脊八桝町
+  "雲ケ畑松上げ"             = "京都府",  # 京都市北区雲ヶ畑出谷町
+  # 大阪府
+  "がんがら火祭り"           = "大阪府",  # 池田市（旧池田村）
+  "まんどろ火祭り"           = "大阪府",  # 箕面市萱野
+  "麦わら松明"               = "大阪府",  # 箕面市北芝
+  # 兵庫県
+  "東光寺鬼会"               = "兵庫県",  # 加西市上万願寺（国指定重要無形民俗文化財）
+  "稲引き樽引き神事"         = "兵庫県",  # 三田市賀茂（加茂神社）
+  "湯村火祭り"               = "兵庫県",  # 美方郡新温泉町湯
+  # 奈良県
+  "往馬大社"                 = "奈良県",  # 生駒市
+  "吉祥草寺茅原大とんど"     = "奈良県",  # 御所市茅原
+  "ほうらんや火祭り"         = "奈良県",  # 橿原市東部六地区
+  # 和歌山県
+  "熊野速玉大社"             = "和歌山県",  # 新宮市（御燈祭り）
+  "稲むらの火祭り"           = "和歌山県",  # 有田郡広川町
+  "熊野那智"                 = "和歌山県"   # 東牟婁郡那智勝浦町
+)
+
+# ------------------------------------------------------------------------------
+# 抽出調査の府県別ウェイト（事後層化）
+# ------------------------------------------------------------------------------
+# 【なぜ必要か】
+# 30祭りの調査対象は府県ごとの抽出率が大きく異なる。素の「利用祭り数」は
+# 抽出の多い府県で使われる植物を過大に、抽出の少ない府県に偏在する植物を
+# 過小に見せてしまう。そこで母集団（近畿地方火祭り.xlsx で把握した156件）の
+# 府県構成に合わせて事後層化ウェイト w = N_府県 / n_府県 を与える。
+#
+# POP_FRAME は data_raw/近畿地方火祭り.xlsx の都道府県欄の集計。
+# 同ファイルで都道府県が空欄の3件（箕面市・堺市・河内長野市）は市町村から
+# 大阪府に算入している。
+#
+# 【限界（結果の解釈時に必ず併記すること）】
+#   1. 156件の母集団自体が悉皆ではない（本文でも「網羅するものではない」と明記）。
+#      特に大阪府は4件と極端に少なく、実態より過小に把握されている可能性が高い。
+#      → 大阪府のウェイトは小さくなりすぎている恐れがある。
+#   2. 府県内の抽出は無作為ではない（有意抽出）。ウェイトが補正するのは
+#      府県間の構成比のみで、府県内の選択バイアスは補正できない。
+#   3. 府県あたりの標本が3〜11件と小さく、府県内の比率は粗い（3件なら0/⅓/⅔/1）。
+#      → 層化ブートストラップで区間を併記する。
+POP_FRAME <- c("滋賀県" = 79, "京都府" = 30, "大阪府" = 4,
+               "兵庫県" = 21, "奈良県" = 12, "和歌山県" = 10)
+
+pref_weights <- function(sample_pref) {
+  n_smp <- table(factor(sample_pref, levels = PREF_ORDER))
+  w <- POP_FRAME[PREF_ORDER] / as.numeric(n_smp)
+  tibble(pref = factor(PREF_ORDER, levels = PREF_ORDER),
+         n_sample = as.numeric(n_smp),
+         n_pop    = as.numeric(POP_FRAME[PREF_ORDER]),
+         w        = as.numeric(w))
+}
 
 # ------------------------------------------------------------------------------
 # 0. ユーティリティ関数
@@ -68,11 +150,30 @@ parse_trend <- function(x) {
   )
 }
 
-# 年齢文字列から数値を抽出（複数返す）
+# 年齢セルから協力者の年齢を抽出（1セルに複数名・自由記述が混在する）
+# ------------------------------------------------------------------------------
+# 【2026-09-02 改訂の理由】0830版では年齢欄の記入形式が多様化したため、
+# 単純な最初の数値の抜き出しでは誤りが生じていた：
+#   「田島氏2004年生まれ（2026年時点21～22歳）」→ 生年 2004 を年齢として拾う
+#   「個別年齢は未確認。中心メンバーは30代～70代…80歳目前」→ 30 を年齢として拾う
+#   「角田氏 64歳／西村氏 46歳。」→ 1セル内の2人目 46 を落とす
+# 方針：
+#   1. 「年齢は未確認」と明記されたセルは協力者個人の年齢なしとして扱う
+#   2. 「NN歳」形式があればそれを全て採用（生年・世代の数値を拾わない）
+#      範囲併記（「21～22歳」）は上限を採用
+#   3. 「歳」がない場合のみ、10〜110の範囲の裸の数値を年齢とみなす
 extract_ages <- function(x) {
-  nums <- str_extract_all(as.character(x), "[0-9]+")[[1]]
-  if (length(nums) == 0) return(NA_real_)
-  as.numeric(nums)
+  s <- str_replace_all(as.character(x), "[\r\n]+", " ")
+  if (is.na(s) || str_trim(s) %in% c("", "NA", "NULL")) return(numeric(0))
+  if (str_detect(s, "年齢は未確認|年齢未確認")) return(numeric(0))
+  with_sai <- str_match_all(s, "([0-9]{1,3})\\s*歳")[[1]]
+  if (nrow(with_sai) > 0) {
+    v <- as.numeric(with_sai[, 2])
+  } else {
+    v <- as.numeric(str_extract_all(s, "[0-9]{1,3}")[[1]])
+  }
+  v <- v[!is.na(v) & v >= 10 & v <= 110]
+  v
 }
 
 # 資源名の正規化（表記ゆれ統一）
@@ -92,20 +193,108 @@ normalize_resource <- function(x) {
     str_replace_all("柴：.*|柴木.*", "柴") %>%
     str_replace_all("フジツル|ツツラフジ", "フジ・ツル類") %>%
     str_replace_all("木の芯棒.*|杉丸太.*", "杉丸太") %>%
-    str_trim()
+    str_trim() %>%
+    canon_resource()
+}
+
+# 2026-09-02 追加：30シート版で新たに現れた表記ゆれの最終統合
+# （上の正規表現チェーンで拾い切れないものを辞書で一括統合）
+CANON_RESOURCE <- c(
+  # タケ類
+  "真タケ/竹" = "タケ/竹", "タケ類" = "タケ/竹", "ナヨタケ/竹" = "タケ/竹",
+  "竹・タケ/竹" = "タケ/竹",
+  # 稲わら・わら製品
+  "藁縄" = "稲わら", "わら縄" = "稲わら", "稲わら縄" = "稲わら",
+  "もちわら" = "稲わら", "稲わら・縄・ムシロ・藁製品" = "稲わら",
+  # 麦わら（「小麦ワラ」はカタカナ表記のため上のルールで拾えない）
+  "小麦ワラ" = "麦わら", "小麦わら" = "麦わら",
+  # ススキ・カヤ
+  "ススギ" = "ススキ", "すすぎ" = "ススキ", "茅" = "カヤ",
+  # フジ・ツル類
+  "藤" = "フジ・ツル類", "藤蔓" = "フジ・ツル類", "フジ" = "フジ・ツル類",
+  # その他の同義語
+  "椎木" = "シイ", "苧殻" = "麻ガラ", "麻ロープ" = "麻縄",
+  # 肥松＝ジン（樹脂化したマツ材）。樹種名（アカマツ・クロマツ）を問わず統合
+  "肥松" = "肥松/ジン", "クロマツの肥松" = "肥松/ジン", "マツのジン" = "肥松/ジン",
+  # マツの葉
+  "マツの枝・マツの葉" = "マツの葉", "マツの松葉" = "マツの葉",
+  # 非植物資材（下流で除外する）
+  "綿タオル" = "非植物資材", "古布・タオル" = "非植物資材",
+  "アルミ製升・灯油" = "非植物資材"
+)
+
+canon_resource <- function(x) {
+  hit <- x %in% names(CANON_RESOURCE)
+  x[hit] <- unname(CANON_RESOURCE[x[hit]])
+  x
+}
+
+# ------------------------------------------------------------------------------
+# 資源名 → 植物分類群（タクソン）への集約
+# ------------------------------------------------------------------------------
+# 【2026-09-02 追加の理由】
+# 0830版の調査票は資源名を「樹種＋部位・形態」で細分して記録している
+# （例：ヒノキの丸太／ヒノキの薪／ヒノキの葉／ヒノキのかんなくず）。
+# 「植物資源の種類数」を数えるには部位を落として分類群に集約する必要がある。
+# ※ 部位別の細かさが必要な分析では resource_norm（記録どおり）を使うこと。
+TAXON_RULES <- list(
+  c("非植物資材",        "アルミ|灯油|タオル|古布|綿"),
+  c("松竹梅（飾り）",    "松竹梅"),
+  c("マツ",              "アカマツ|クロマツ|マツ|肥松|ジン|赤松"),
+  c("ヒノキ",            "ヒノキ|檜"),
+  c("スギ",              "スギ|杉"),
+  c("タケ/ササ類",       "タケ|竹|ササ|笹"),
+  c("イネ（稲わら）",    "稲ワラ|稲わら|稲藁|藁縄|わら縄|もちわら|もち米|赤米|稲穂|^稲"),
+  c("ムギ（麦わら）",    "小麦|麦わら|麦ワラ"),
+  c("ナタネ（菜種ガラ）","菜種|ナタネ"),
+  c("ヨシ",              "ヨシ|葦"),
+  c("ススキ",            "ススキ|ススギ|すすぎ"),
+  c("カヤ",              "カヤ|^茅"),
+  c("アサ（麻）",        "麻ガラ|麻縄|麻ロープ|苧殻"),
+  c("フジ類",            "フジ|藤|ツツラフジ"),
+  c("ツツジ類",          "ツツジ|コバノミツバツツジ"),
+  c("クロモジ",          "クロモジ"),
+  c("ソヨゴ",            "ソヨゴ"),
+  c("ハンノキ",          "ハンノキ"),
+  c("シイ",              "シイ|椎"),
+  c("ヌルデ",            "ヌルデ"),
+  c("シキミ",            "シキミ"),
+  c("サカキ",            "サカキ|榊"),
+  c("ツバキ",            "ツバキ"),
+  c("ヒオウギ",          "ヒオウギ"),
+  c("クリ",              "クリ|栗"),
+  c("吉祥草",            "吉祥草"),
+  c("雑木・広葉樹類",    "雑木|広葉樹|^柴"),
+  c("食材（各種）",      "食材"),
+  c("樹種不明の木材",    "木の丸太|木樽|^薪$")
+)
+
+normalize_taxon <- function(x) {
+  v <- str_replace_all(as.character(x), "（.*?）|\\(.*?\\)", "")
+  v <- str_replace_all(v, "\\s+", "")
+  out <- rep(NA_character_, length(v))
+  for (r in TAXON_RULES) {
+    hit <- is.na(out) & !is.na(v) & str_detect(v, r[2])
+    out[hit] <- r[1]
+  }
+  out[is.na(out) & !is.na(v)] <- v[is.na(out) & !is.na(v)]  # 未分類はそのまま残す
+  out
 }
 
 # ------------------------------------------------------------------------------
 # 1. 全シート読み込み
 # ------------------------------------------------------------------------------
 
-sheets <- excel_sheets(DATA_PATH)
+sheet_ids <- excel_sheets(DATA_PATH)          # 読み込み用（原文のまま）
+sheets    <- str_trim(sheet_ids)                # 表示・結合キー用（前後空白を除去）
+# 旧版では「小田神社 」の末尾空白により scale_df との結合が外れ、
+# n_resources が NA になっていた。ここで統一する。
 cat("シート数:", length(sheets), "\n")
 
-survey_list <- lapply(sheets, function(sh) {
+survey_list <- lapply(sheet_ids, function(sh) {
   df <- read_excel(DATA_PATH, sheet = sh, col_names = FALSE)
   list(
-    festival         = sh,
+    festival         = str_trim(sh),
     age_raw          = get_row_values(df, "^年齢$"),
     belief           = get_row_values(df, "^信仰$"),
     purpose          = get_row_values(df, "^祭り目的$"),
@@ -134,23 +323,22 @@ survey_df <- bind_rows(lapply(survey_list, as.data.frame, stringsAsFactors = FAL
 # 1b. 協力者年齢 — 長形式（複数協力者を個別に展開）
 # ------------------------------------------------------------------------------
 
-age_long <- lapply(sheets, function(sh) {
+age_long <- lapply(sheet_ids, function(sh) {
   df <- read_excel(DATA_PATH, sheet = sh, col_names = FALSE)
   age_row <- df[str_replace_all(as.character(df[[1]]), "\\s+", "") == "年齢", ]
   if (nrow(age_row) == 0) return(NULL)
   vals <- as.character(age_row[1, -1])
   vals <- vals[!is.na(vals) & vals != "NA"]
-  ages <- as.numeric(str_extract(vals, "[0-9]+"))
-  ages <- ages[!is.na(ages)]
+  ages <- unlist(lapply(vals, extract_ages))
   if (length(ages) == 0) return(NULL)
-  data.frame(festival = sh, age = ages)
+  data.frame(festival = str_trim(sh), age = ages)
 }) %>% bind_rows()
 
 # ------------------------------------------------------------------------------
 # 1c. 植物資源 + 生息地 — 長形式
 # ------------------------------------------------------------------------------
 
-resource_raw <- lapply(sheets, function(sh) {
+resource_raw <- lapply(sheet_ids, function(sh) {
   df <- read_excel(DATA_PATH, sheet = sh, col_names = FALSE)
   col1_clean <- str_replace_all(as.character(df[[1]]), "\\s+", "")
 
@@ -181,7 +369,7 @@ resource_raw <- lapply(sheets, function(sh) {
   }
 
   data.frame(
-    festival      = sh,
+    festival      = str_trim(sh),
     resource_raw  = as.character(rows[[1]])[valid],
     landscape_raw = get_col_vals(landscape_col)[valid],
     use_raw       = get_col_vals(use_col)[valid],
@@ -283,6 +471,67 @@ code_embeddedness <- function(x) {
   )
 }
 
+# ------------------------------------------------------------------------------
+# 選定理由の類型（2026-09-02 新設）
+# ------------------------------------------------------------------------------
+# 【従来の code_tek との違い】
+# 旧 TEK 5類型（eco/aes/trad/prag/symb）は 0830版の選定理由の自由記述を
+# 読み直すと以下を区別できていなかった：
+#   ・燃焼特性（燃えやすさ・火力・持続）と 物理/加工特性（まっすぐ・軽い・強度）
+#   ・単なる入手容易性と、生業の副産物であること（里山・農林業との結合）
+#   ・本来の選好ではなく、資源枯渇・コスト・技術低下による代替選択
+#   ・安全・子供の参加・世代継承といった社会的機能
+#   ・環境保全そのものを目的とする選択（ヨシ刈り、間伐材利用）
+# そこで156件の原文から帰納的に10類型を立てた。1記録が複数類型を持つ
+# （実際 156件中104件が2類型以上）。
+#   burn   燃焼特性       燃えやすい・火力・持続時間・油分・煙
+#   phys   物理/加工特性  まっすぐ・軽い・強度・しなやか・加工しやすい・寸法
+#   sens   感覚/美的      色・香り・見た目・音・緑・清浄感・装飾性
+#   avail  入手容易性     手に入りやすい・地域に多い・身近・調達が容易
+#   byprod 生業副産物     農業/林業の副産物・裏作・間伐材・不要材の循環利用
+#   trad   伝統/慣習      昔からの材料・伝統・由来・継承
+#   symb   象徴/宗教      縁起・神聖・魔除け・奉納・豊穣の象徴・伝承
+#   subst  代替/制約      本命が確保できない/高価/技術低下のための代替選択
+#   social 社会的機能     子供の参加・世代継承・安全・村同士の競い合い
+#   env    環境保全       水質浄化・環境保護政策・里山保全を目的とする選択
+REASON_RULES <- list(
+  c("burn",  "燃えやす|燃えにく|火力|火勢|火付|火つき|着火|燃焼|長持ち|燃え残|持続|油分|松脂|樹脂|煙|温度|よく燃え|最後まで燃|燃やしやす|派手に燃え|消えにく|火に強|燃え方|火よけ|燃え上が"),
+  c("phys",  "まっすぐ|真っ直ぐ|直材|直線性|軽い|軽く|軽さ|重い|強度|強さ|丈夫|しなやか|しなり|柔軟|柔らか|加工しやす|扱いやす|使いやす|割り加工|太さ|太く|長さ|長く|径|折れにく|粘り|中空|細く|形状|曲がりが少な|寸法|かさ|束ねやす|締めやす|切れにく|構造材|骨組み|芯|支柱|型崩れ"),
+  c("sens",  "色|綺麗|きれい|美し|香り|見た目|肌が|緑|音|白っぽ|清浄|外観|見栄え|装飾|飾り"),
+  c("avail", "手に入りやす|入手|調達|身近|近くに|地域に多い|豊富|得やす|確保できる|多く生え|自生|地域内|周辺で|供給|地域から|地域産|地域で得|地域にある|容易"),
+  c("byprod","副産物|裏作|二毛作|間伐|循環利用|不要材|廃棄|再利用|余った|農産物|農作物|無駄なく"),
+  c("trad",  "昔から|伝統|慣習|昔の|継承|由来|古くから|歴史|従来|旧来|昔ぼ|開始時|定着"),
+  c("symb",  "縁起|神聖|めでた|魔除|奉納|象徴|祈願|神事|神が宿|常若|信仰|伝承|清め|しめ縄|注連縄|御幣|紙垂|供物|五穀豊穣|豊作|神に|神前|祈るための木"),
+  c("subst", "代替|代用|代わり|確保できない|不足|安価|コスト|補強|技術力|技術が弱く|現実的|貴重|模倣"),
+  c("social","子供|子ども|教育|次世代|関心|対抗意識|見せ場|競う|遊び|楽しみ|安全|ささくれ|危険"),
+  c("env",   "水質|浄化|環境保護|環境保全|里山保全")
+)
+
+REASON_LABELS <- c(
+  burn   = "燃焼特性",
+  phys   = "物理・加工特性",
+  sens   = "感覚・美的",
+  avail  = "入手容易性",
+  byprod = "生業副産物",
+  trad   = "伝統・慣習",
+  symb   = "象徴・宗教",
+  subst  = "代替・制約",
+  social = "社会的機能",
+  env    = "環境保全"
+)
+
+code_reason <- function(x) {
+  s <- str_replace_all(as.character(x), "[\r\n]+", " ")
+  if (is.na(s) || str_trim(s) %in% c("", "NA", "NULL")) return(NA_character_)
+  if (str_detect(s, "^不明$|^理由なし|^未確認")) return(NA_character_)
+  # 「田遊び」は農耕儀礼の名称であり social の「遊び」ではない（誤検出の回避）
+  s <- str_replace_all(s, "田遊び", "田儀礼")
+  ty <- character(0)
+  for (r in REASON_RULES) if (str_detect(s, r[2])) ty <- c(ty, r[1])
+  if (!length(ty)) return(NA_character_)
+  paste(ty, collapse = "|")
+}
+
 code_tek <- function(x) {
   x <- str_replace_all(as.character(x), "\n", " ")
   if (is.na(x) || str_trim(x) %in% c("", "NA", "NULL")) return(NA_character_)
@@ -301,20 +550,46 @@ code_tek <- function(x) {
   paste(types, collapse = "|")
 }
 
+# ------------------------------------------------------------------------------
+# 生息地（景観）の正規化
+# ------------------------------------------------------------------------------
+# 【2026-09-02 改訂の理由】
+# 14シート版では景観欄が統制語彙（森林／湿地／水田／畑／荒地／庭）で記入されて
+# いたが、30シート版の新規16シートは自由記述（例「賀茂周辺の赤松林・里山。冬に
+# 枯死・樹脂化した松を探す山林利用。」）で記入されている。旧来の前方一致置換では
+# 分類できないため、キーワードによる優先順位付き分類に変更した。
+# ・旧6カテゴリーは維持し、新データで頻出する2類型を追加：
+#     草地       … ススキ群落・草本景観など二次草原（旧「荒地」とは区別）
+#     流通・生活空間 … 製材所・木材流通・購入・各家庭など景観と呼べない調達元
+# ・「茅原」は地名（御所市茅原）でもあるため草地キーワードから除外している。
+# ・判定結果は landscape_mapping_check.csv に原文つきで出力するので要確認。
+classify_landscape <- function(x) {
+  v <- str_replace_all(as.character(x), "[\r\n]+", " ")
+  out <- rep(NA_character_, length(v))
+  rules <- list(
+    c("流通・生活空間", "^製材所|^木材加工|木材流通|樽製造|企業協力|各家庭|旅館|温泉観光施設|生活・観光空間|野外活動施設"),
+    c("水田",  "水田|田んぼ|稲作|田の隅|神田"),
+    c("湿地",  "ヨシ原|よし原|湿地|河川|湖岸|水辺|川沿い"),
+    c("畑",    "畑|農地|圃場"),
+    c("草地",  "ススキ群落|草本景観|草地|原っぱ|草原|ススキ状"),
+    c("森林",  "森林|山林|里山|竹林|竹薮|竹やぶ|松林|雑木林|二次林|社叢|境内|神社の森|樹林|山地|丘陵|林縁|林道|防災林|伐採跡|林$|林。|林・|林、"),
+    c("庭",    "庭園|^庭$|屋敷林"),
+    c("荒地",  "荒地|空地|放棄地"),
+    c("流通・生活空間", "流通|購入|業者|外部流通|市場")
+  )
+  for (r in rules) {
+    hit <- is.na(out) & !is.na(v) & str_detect(v, r[2])
+    out[hit] <- r[1]
+  }
+  out[!is.na(v) & str_detect(v, "^(なし|NA|NULL|不明)$")] <- NA_character_
+  out
+}
+
 resource_df <- resource_raw %>%
   mutate(
     resource_norm = normalize_resource(resource_raw),
-    # 生息地の正規化
-    landscape_norm = landscape_raw %>%
-      str_replace_all("\\s+|\\n.*", "") %>%
-      str_replace_all("水田.*", "水田") %>%
-      str_replace_all("湿地.*|ヨシ原.*", "湿地") %>%
-      str_replace_all("森林.*|庭園.*", "森林") %>%
-      str_replace_all("畑.*", "畑") %>%
-      str_replace_all("荒地.*", "荒地") %>%
-      str_replace_all("庭.*", "庭") %>%
-      str_replace_all("^なし$|^NA$|^NULL$", NA_character_) %>%
-      str_trim(),
+    # 生息地の正規化（classify_landscape() を参照）
+    landscape_norm = classify_landscape(landscape_raw),
     # 代替可能性スコア（1〜3）
     subst_score = code_substitutability(subst_raw),
     # 調達方法の嵌入度スコア（1〜3）
@@ -324,7 +599,11 @@ resource_df <- resource_raw %>%
     # 利用方法カテゴリー（複数可）
     use_types = mapply(code_use, use_raw),
     # 日常利用スコア（1〜3）
-    daily_score = mapply(code_daily, daily_raw)
+    daily_score = mapply(code_daily, daily_raw),
+    # 植物分類群（部位・形態を落とした集約。種類数のカウントに使う）
+    resource_taxon = normalize_taxon(resource_raw),
+    # 選定理由の類型（複数可、パイプ区切り）
+    reason_types = vapply(reason_raw, code_reason, character(1))
   ) %>%
   # 長すぎる行（注記として混入したもの）と空白・NAを除去
   filter(
@@ -332,62 +611,212 @@ resource_df <- resource_raw %>%
     str_trim(resource_norm) != "",
     resource_norm != "NA",
     nchar(resource_norm) <= 20,
-    !str_detect(resource_norm, "[。！？]|使用不可|注意")
+    !str_detect(resource_norm, "[。！？]|使用不可|注意"),
+    # 2026-09-02 追加：本分析は「植物資源」を対象とするため非植物資材を除外
+    # （調査票側で「非植物補助資材」と注記されたアルミ製升・灯油、古布・タオル等）
+    resource_norm != "非植物資材"
   )
 
 # ==============================================================================
-# 図01: 協力者年齢（複数協力者を個別表示）
+# 植物 × 祭り の解析単位と、府県ウェイトによる推定
 # ==============================================================================
+# 【解析単位】 祭り × 植物分類群（festival × taxon）
+#   ・同じ祭りで同じ植物の部位が複数記録されていても（ヒノキの丸太／薪／葉）
+#     1件として数える（利用の有無を見るため）
+#   ・選定理由は、その祭り・その植物について記録された全部位の理由類型の和集合
+# 【推定量】
+#   raw_prev   素の割合          = 使用祭り数 / 30
+#   w_prev     母集団推定割合    = Σ w_i·u_i / Σ w_i  （Σw_i = 156）
+#   eq_prev    府県均等化割合    = 6府県の府県内使用率の単純平均
+#                                  （母集団件数の推定を使わない感度分析用）
+#   w_n        母集団での使用祭り数の推定値 = Σ w_i·u_i
+#   CI         府県内で祭りを復元抽出する層化ブートストラップ（2000回）の
+#              パーセンタイル区間。標本が府県3〜11件と小さいため区間は広い。
+# ------------------------------------------------------------------------------
+
+# 祭り単位の標本設計表（府県とウェイト）
+fest_design <- tibble(festival = sheets) %>%
+  mutate(pref = factor(unname(FESTIVAL_PREF[festival]), levels = PREF_ORDER)) %>%
+  left_join(pref_weights(unname(FESTIVAL_PREF[sheets])), by = "pref")
+
+# 祭り × 植物分類群（部位を統合、理由類型は和集合）
+plant_festival <- resource_df %>%
+  filter(!is.na(resource_taxon), resource_taxon != "非植物資材") %>%
+  group_by(festival, resource_taxon) %>%
+  summarise(
+    n_parts      = n(),
+    parts        = paste(unique(resource_raw), collapse = " / "),
+    reason_types = {
+      ty <- unique(unlist(strsplit(na.omit(reason_types), "\\|")))
+      if (length(ty) == 0) NA_character_ else paste(sort(ty), collapse = "|")
+    },
+    .groups = "drop"
+  ) %>%
+  left_join(fest_design, by = "festival")
+
+# --- 推定関数 ---------------------------------------------------------------
+# u_mat: 祭り(行) × 植物(列) の 0/1 利用行列
+usage_matrix <- function(df, unit_col) {
+  tab <- table(factor(df$festival, levels = fest_design$festival),
+               df[[unit_col]])
+  (tab > 0) * 1
+}
+
+# 素・均等化・母集団推定の3種の割合をまとめて計算
+estimate_prevalence <- function(u_mat, design = fest_design, n_boot = 2000, seed = 20260902) {
+  w  <- design$w
+  pr <- design$pref
+  W  <- sum(w)
+  raw_n  <- colSums(u_mat)
+  w_n    <- as.numeric(t(u_mat) %*% w)
+  # 府県均等化：府県内使用率の単純平均
+  eq <- sapply(levels(pr), function(g) colMeans(u_mat[pr == g, , drop = FALSE]))
+  eq_prev <- rowMeans(eq)
+
+  set.seed(seed)
+  idx_by_pref <- split(seq_len(nrow(u_mat)), pr)
+  boot <- replicate(n_boot, {
+    idx <- unlist(lapply(idx_by_pref, function(ii) sample(ii, length(ii), replace = TRUE)))
+    as.numeric(t(u_mat[idx, , drop = FALSE]) %*% w[idx]) / W
+  })
+  tibble(
+    taxon    = colnames(u_mat),
+    raw_n    = as.numeric(raw_n),
+    raw_prev = as.numeric(raw_n) / nrow(u_mat),
+    eq_prev  = as.numeric(eq_prev),
+    w_n      = w_n,
+    w_prev   = w_n / W,
+    lo       = apply(boot, 1, quantile, 0.025),
+    hi       = apply(boot, 1, quantile, 0.975)
+  )
+}
+
+# ==============================================================================
+# 図01: 調査対象の基本プロファイル（協力者年齢 × 植物資源種数）
+# ------------------------------------------------------------------------------
+# 左：協力者の年齢（点＝個別協力者、横棒＝平均）
+# 右：使用している植物資源の種類数（分類群ベース）
+# 祭りの並び順は両図で共通。所属府県でグループ化し、府県内は平均年齢の高い順（上ほど高齢）。
+# 右図は左図と同じ行に対応するため、縦軸のラベルを省略している。
+# （旧 図04「植物資源種数」は本図の右パネルに統合した）
+# ==============================================================================
+
+# --- 植物資源の種類数（分類群ベース。図10・図12でも使用） ---
+resource_diversity <- resource_df %>%
+  group_by(festival) %>%
+  summarise(n_resources = n_distinct(resource_taxon), .groups = "drop")
 
 age_summary <- age_long %>%
   group_by(festival) %>%
   summarise(mean_age = mean(age), n_inf = n(), .groups = "drop")
 
-festival_order <- age_summary %>%
-  arrange(mean_age) %>%
+# --- 全30祭りを含む並び順の土台（年齢・資源数が欠測の祭りも行を残す） ---
+festival_profile <- tibble(festival = sheets) %>%
+  mutate(pref = factor(unname(FESTIVAL_PREF[festival]), levels = PREF_ORDER)) %>%
+  left_join(age_summary,        by = "festival") %>%
+  left_join(resource_diversity, by = "festival")
+
+if (any(is.na(festival_profile$pref))) {
+  warning("府県未登録の祭り: ",
+          paste(festival_profile$festival[is.na(festival_profile$pref)], collapse = ", "))
+}
+
+# 府県ごとにまとめ、府県内は平均年齢の昇順（coord_flip 後は上ほど高齢）
+# coord_flip 後は最初の水準が下に来るため、昇順で並べると上ほど高齢になる
+festival_order <- festival_profile %>%
+  arrange(pref, mean_age) %>%
   pull(festival)
 
+fct_fes <- function(x) factor(x, levels = festival_order)
+
+festival_profile <- festival_profile %>% mutate(festival = fct_fes(festival))
+
 age_long_f <- age_long %>%
-  mutate(festival = factor(festival, levels = festival_order))
+  left_join(festival_profile %>% select(festival, pref) %>%
+              mutate(festival = as.character(festival)), by = "festival") %>%
+  mutate(festival = fct_fes(festival))
 
-age_summary_f <- age_summary %>%
-  mutate(festival = factor(festival, levels = festival_order))
+age_summary_f <- festival_profile %>% filter(!is.na(mean_age))
 
-age_multi <- age_long %>%
+age_multi <- age_long_f %>%
   group_by(festival) %>%
   filter(n() > 1) %>%
-  mutate(festival = factor(festival, levels = festival_order)) %>%
   ungroup()
 
-p01_age <- ggplot(age_long_f, aes(x = festival, y = age)) +
-  # 複数協力者を縦線でつなぐ（点より先に描く）
+# 各祭りの協力者年齢を「53, 76, 77」の形にまとめた注記用ラベル
+age_label_df <- age_long_f %>%
+  filter(!is.na(age)) %>%
+  group_by(festival, pref) %>%
+  summarise(age_label = paste(sort(age), collapse = ", "), .groups = "drop")
+
+# 府県ごとの行数に応じてパネル高さを可変にする共通設定
+facet_pref <- facet_grid(pref ~ ., scales = "free_y", space = "free_y")
+
+# --- 左：協力者年齢 ---
+p01a_age <- ggplot(age_long_f, aes(x = festival, y = age)) +
+  # 【重要】全30祭りを含む geom_blank を最初のレイヤーに置く。
+  # これがないと離散軸は最初のレイヤー（複数協力者のみを含む age_multi）で
+  # 訓練され、右パネルと行の並びがずれる。年齢が欠測の祭りの行もこれで残る。
+  geom_blank(data = festival_profile, aes(x = festival, y = 60)) +
   geom_line(data = age_multi, aes(group = festival),
             color = "gray60", linewidth = 0.5) +
-  # 均値横棒：geom_errorbar で ymin=ymax=mean_age（離散x軸に対応）
   geom_errorbar(data = age_summary_f,
                 aes(x = festival, ymin = mean_age, ymax = mean_age),
-                width = 0.5, color = "#444444", linewidth = 1.0,
+                width = 0.6, color = "#444444", linewidth = 1.0,
                 inherit.aes = FALSE) +
-  # 個別年齢（点）
-  geom_point(aes(color = festival), size = 3.5, alpha = 0.9,
-             show.legend = FALSE) +
-  # 年齢ラベル
-  geom_text(aes(label = age), hjust = -0.3, size = 3, color = "gray30") +
+  geom_point(size = 3, alpha = 0.9, color = "#377EB8") +
+  # 年齢の数値は点の脇ではなくパネル右端にまとめて表示（近い年齢の重なりを回避）
+  geom_text(data = age_label_df, aes(x = festival, y = 99, label = age_label),
+            hjust = 1, size = 2.9, color = "gray30", inherit.aes = FALSE) +
   coord_flip() +
-  labs(
-    title = "協力者年齢（祭り別）",
-    subtitle = "点 = 個別協力者、横棒 = 平均値",
-    x = NULL, y = "年齢（歳）",
-    caption = paste0("全", nrow(age_long), "名の協力者、",
-                     n_distinct(age_multi$festival), "祭りは複数名")
-  ) +
-  scale_y_continuous(limits = c(25, 98), breaks = seq(30, 90, 10)) +
+  facet_pref +
+  scale_y_continuous(limits = c(25, 100), breaks = seq(30, 90, 20)) +
+  labs(title = "協力者年齢", x = NULL, y = "年齢（歳）") +
   theme_bw(base_family = "HiraginoSans-W3") +
   theme(plot.title = element_text(face = "bold"),
-        panel.grid.major.y = element_blank())
+        panel.grid.major.y = element_blank(),
+        strip.text.y = element_blank(),
+        strip.background.y = element_blank())
 
-ggsave(file.path(OUTPUT_DIR, "01_age_by_festival.png"), p01_age,
-       width = 9, height = 5.5, dpi = 150)
+# --- 右：植物資源種数（縦軸ラベルなし） ---
+p01b_div <- festival_profile %>%
+  ggplot(aes(x = festival, y = n_resources)) +
+  geom_col(fill = "#4DAF4A", alpha = 0.85, width = 0.7) +
+  geom_text(aes(label = n_resources), hjust = -0.35, size = 2.9, color = "gray30") +
+  coord_flip() +
+  facet_pref +
+  scale_y_continuous(limits = c(0, max(festival_profile$n_resources, na.rm = TRUE) + 1.5),
+                     breaks = seq(0, 12, 2)) +
+  labs(title = "植物資源種数", x = NULL, y = "植物資源の種類数（分類群）") +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid.major.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+
+p01_profile <- p01a_age + p01b_div +
+  patchwork::plot_layout(widths = c(1, 0.62)) +
+  patchwork::plot_annotation(
+    title = "調査対象30火祭りの基本プロファイル",
+    subtitle = paste0("左：協力者年齢（点＝個別協力者、縦線＝平均、右端の数字＝全協力者の年齢） ／ 右：植物資源の種類数",
+                      "\n※祭りの並びは府県別、府県内は平均年齢の高い順"),
+    caption = paste0("協力者 全", nrow(age_long), "名（複数名の祭りは点を縦線で連結）"),
+    theme = theme(plot.title = element_text(face = "bold", family = "HiraginoSans-W3"),
+                  plot.subtitle = element_text(family = "HiraginoSans-W3"),
+                  plot.caption = element_text(family = "HiraginoSans-W3"))
+  )
+
+ggsave(file.path(OUTPUT_DIR, "01_profile_age_and_resources.png"), p01_profile,
+       width = 11, height = 8.5, dpi = 150)
+
+# プロファイル表（府県・平均年齢・資源種数）
+write.csv(
+  festival_profile %>%
+    arrange(pref, mean_age) %>%
+    select(pref, festival, mean_age, n_informants = n_inf, n_resources),
+  file.path(OUTPUT_DIR, "festival_profile.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
 
 # ==============================================================================
 # 図02: 関係者数・観光客数トレンド（横ばい = 黄色）
@@ -428,64 +857,103 @@ ggsave(file.path(OUTPUT_DIR, "02_trend_participants_tourists.png"), p02_trend,
        width = 7, height = 5, dpi = 150)
 
 # ==============================================================================
-# 図03: 植物資源の出現頻度（全件）
+# 図03: 植物の利用頻度 — 抽出の府県偏りを補正した推定
+# ------------------------------------------------------------------------------
+# 03a 素の利用祭り数（部位重複を除いた祭り数）と母集団推定割合の比較
+# 03b 府県別の利用率ヒートマップ（順位が動く理由を示す）
 # ==============================================================================
 
-resource_count <- resource_df %>%
-  distinct(festival, resource_norm) %>%   # 同一祭りの重複を除く
-  count(resource_norm, sort = TRUE)
+u_taxon  <- usage_matrix(plant_festival, "resource_taxon")
+prev_tax <- estimate_prevalence(u_taxon)
 
-cat("\n=== 植物資源の使用件数（全", nrow(resource_count), "種） ===\n")
-print(as.data.frame(resource_count))
+cat("\n=== 府県別の抽出率とウェイト ===\n")
+print(as.data.frame(pref_weights(unname(FESTIVAL_PREF[sheets]))))
 
-p03_resource <- resource_count %>%
-  mutate(resource_norm = fct_reorder(resource_norm, n),
-         fill_col = ifelse(n >= 5, "#08519C",
-                    ifelse(n >= 3, "#3182BD", "#6BAED6"))) %>%
-  ggplot(aes(x = resource_norm, y = n, fill = fill_col)) +
-  geom_col(alpha = 0.88) +
-  geom_text(aes(label = n), hjust = -0.2, size = 3.2) +
-  coord_flip() +
-  scale_fill_identity(guide = "legend",
-                      labels = c("#08519C" = "5件以上",
-                                 "#3182BD" = "3〜4件",
-                                 "#6BAED6" = "1〜2件"),
-                      name = "利用件数") +
-  scale_y_continuous(limits = c(0, max(resource_count$n) + 1.2)) +
-  labs(title = "火祭りで使用される植物資源（全種）",
-       subtitle = paste0("全", nrow(survey_df), "祭り × ",
-                         nrow(resource_count), "種の資源"),
-       x = NULL, y = "利用祭り件数") +
+cat("\n=== 植物の利用頻度（素 vs 補正）===\n")
+print(as.data.frame(
+  prev_tax %>%
+    arrange(desc(w_prev)) %>%
+    transmute(taxon, raw_n,
+              素の割合 = round(raw_prev, 3),
+              府県均等化 = round(eq_prev, 3),
+              母集団推定割合 = round(w_prev, 3),
+              CI = paste0("[", round(lo, 2), ", ", round(hi, 2), "]"),
+              推定使用祭り数 = round(w_n, 1))
+))
+
+# --- 03a: 素 vs 母集団推定 --------------------------------------------------
+prev_plot <- prev_tax %>%
+  filter(raw_n >= 2) %>%                     # 1祭りのみの植物は推定が不安定なため除外
+  mutate(taxon = fct_reorder(taxon, w_prev))
+
+p03a <- ggplot(prev_plot, aes(y = taxon)) +
+  geom_errorbar(aes(xmin = lo, xmax = hi), orientation = "y", width = 0,
+                color = "gray70", linewidth = 0.8) +
+  geom_segment(aes(x = raw_prev, xend = w_prev, y = taxon, yend = taxon),
+               color = "gray45", linewidth = 0.4,
+               arrow = arrow(length = unit(0.10, "cm"), type = "closed")) +
+  geom_point(aes(x = raw_prev, color = "素の割合（30祭りのうち）"), size = 2.6) +
+  geom_point(aes(x = w_prev,   color = "母集団推定割合（府県ウェイト）"), size = 3.2) +
+  scale_color_manual(values = c("素の割合（30祭りのうち）" = "#999999",
+                                "母集団推定割合（府県ウェイト）" = "#D62728"),
+                     name = NULL) +
+  scale_x_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(
+    title = "植物ごとの利用の広がり — 抽出の府県偏りを補正",
+    subtitle = paste0("解析単位＝祭り×植物分類群（同一祭り内の部位重複は1件に集約） ／ ",
+                      "2祭り以上で使用された植物のみ\n",
+                      "灰＝素の割合、赤＝母集団156件に事後層化した推定割合、横棒＝層化ブートストラップ95%区間"),
+    x = "その植物を使用する火祭りの割合", y = NULL,
+    caption = "矢印は補正による移動方向。区間は府県あたり標本が小さいため広い。"
+  ) +
   theme_bw(base_family = "HiraginoSans-W3") +
   theme(plot.title = element_text(face = "bold"),
+        legend.position = "bottom",
+        panel.grid.major.y = element_blank())
+
+ggsave(file.path(OUTPUT_DIR, "03a_plant_prevalence_weighted.png"), p03a,
+       width = 9.5, height = max(5, nrow(prev_plot) * 0.42), dpi = 150)
+
+# --- 03b: 府県別の利用率ヒートマップ ----------------------------------------
+pref_prev <- plant_festival %>%
+  count(pref, resource_taxon) %>%
+  right_join(expand_grid(pref = factor(PREF_ORDER, levels = PREF_ORDER),
+                         resource_taxon = prev_plot$taxon),
+             by = c("pref", "resource_taxon")) %>%
+  mutate(n = ifelse(is.na(n), 0, n)) %>%
+  left_join(pref_weights(unname(FESTIVAL_PREF[sheets])) %>% select(pref, n_sample),
+            by = "pref") %>%
+  mutate(prev = n / n_sample,
+         resource_taxon = factor(resource_taxon, levels = levels(prev_plot$taxon)))
+
+p03b <- ggplot(pref_prev, aes(x = pref, y = resource_taxon, fill = prev)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = ifelse(n > 0, paste0(n, "/", n_sample), "")),
+            size = 2.8, color = "gray20", family = "HiraginoSans-W3") +
+  scale_fill_gradient(low = "#F7FBFF", high = "#08519C",
+                      labels = scales::percent, name = "府県内の利用率") +
+  labs(title = "府県別の植物利用率",
+       subtitle = paste0("セル内は「使用した祭り数／その府県の調査祭り数」。\n",
+                         "府県ごとの標本数の差が図03aの補正量を決める。"),
+       x = NULL, y = NULL) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid = element_blank(),
         legend.position = "bottom")
 
-ggsave(file.path(OUTPUT_DIR, "03_plant_resources_freq.png"), p03_resource,
-       width = 9, height = max(6, nrow(resource_count) * 0.38), dpi = 150)
+ggsave(file.path(OUTPUT_DIR, "03b_plant_prevalence_by_pref.png"), p03b,
+       width = 8.5, height = max(5, nrow(prev_plot) * 0.36), dpi = 150)
+
+write.csv(
+  prev_tax %>% arrange(desc(w_prev)),
+  file.path(OUTPUT_DIR, "plant_prevalence_weighted.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
 
 # ==============================================================================
-# 図04: 植物資源種数（祭り別）
+# 図04: 植物資源種数（祭り別）→ 図01 の右パネルに統合（2026-09-02）
+# resource_diversity の計算は図01のブロックに移動した。
 # ==============================================================================
-
-resource_diversity <- resource_df %>%
-  group_by(festival) %>%
-  summarise(n_resources = n_distinct(resource_norm), .groups = "drop") %>%
-  arrange(desc(n_resources))
-
-p04_diversity <- resource_diversity %>%
-  mutate(festival = fct_reorder(festival, n_resources)) %>%
-  ggplot(aes(x = festival, y = n_resources)) +
-  geom_col(fill = "#4DAF4A", alpha = 0.85) +
-  geom_text(aes(label = n_resources), hjust = -0.2, size = 3.5) +
-  coord_flip() +
-  scale_y_continuous(limits = c(0, max(resource_diversity$n_resources) + 1)) +
-  labs(title = "各火祭りの植物資源種数",
-       x = NULL, y = "植物資源の種類数") +
-  theme_bw(base_family = "HiraginoSans-W3") +
-  theme(plot.title = element_text(face = "bold"))
-
-ggsave(file.path(OUTPUT_DIR, "04_resource_diversity.png"), p04_diversity,
-       width = 8, height = 5, dpi = 150)
 
 # ==============================================================================
 # 図05: 組織の有無
@@ -662,6 +1130,10 @@ ggsave(file.path(OUTPUT_DIR, "08_recent_challenges.png"), p08_challenge,
 # 図09b: 植物資源 × 祭り — 調達嵌入度マトリクス
 # ==============================================================================
 
+# 図03の resource_count は廃止。2祭り以上で使われた資源名（記録どおりの粒度）
+resource_count <- resource_df %>%
+  distinct(festival, resource_norm) %>%
+  count(resource_norm, sort = TRUE)
 top_resources <- resource_count %>% filter(n >= 2) %>% pull(resource_norm)
 
 matrix_theme <- theme_bw(base_family = "HiraginoSans-W3") +
@@ -750,7 +1222,26 @@ scale_df <- tribble(
   "八幡祭り",                    550,          16500,
   "王の浜若宮神社",              30,           30,
   "小田神社",                    60,           400,
-  "大嶋奥津嶋神社",              50,           20
+  "大嶋奥津嶋神社",              50,           20,
+  # ---- 2026-09-02 追加：30シート版の新規16祭り ------------------------------
+  # 上と同じ方針（関係者数=複数記載なら最大値、観光客数=現地参集人数）で
+  # 自由記述から読み取った値。★ は原文が幅・感覚値・未計数のため要確認。
+  "往馬大社",                    200,          5000,
+  "熊野速玉大社",                2000,         NA,     # ★ 運営100人＋上り子・本番参加者1,500〜2,000人／観光客数の明示なし
+  "稲むらの火祭り",              200,          600,    # ★ 「参加者600人程」＝見物客とほぼ同義との説明
+  "熊野那智",                    120,          3000,
+  "嵯峨のお松明式",              40,           1000,   # ★ 「1,000人を大きく上回る」正確な計数なし → 下限値
+  "広河原松上げ",                80,           1000,
+  "がんがら火祭り",              53,           10000,  # ★ 関係者数はLINE登録53名のみ（当日協力者は未計数）
+  "まんどろ火祭り",              16,           4000,   # ★ 関係者数は実行委員会15〜16名のみ
+  "麦わら松明",                  10,           100,    # ★ 中核10人前後／観光客は未計数「100人以上」
+  "東光寺鬼会",                  21,           200,
+  "吉祥草寺茅原大とんど",        170,          3500,
+  "稲引き樽引き神事",            20,           60,
+  "花背松上げ",                  30,           300,    # ★ 「二、三百人」「五百人ぐらい」複数の感覚値
+  "雲ケ畑松上げ",                10,           30,
+  "湯村火祭り",                  53,           300,
+  "ほうらんや火祭り",            10,           100     # ★ 代表層約10名のみ／2026年は神事のみで大幅減
 ) %>%
   left_join(resource_diversity, by = "festival")
 
@@ -811,7 +1302,7 @@ p10_scatter <- scale_df %>%
     subtitle = "縦破線: 関係者数200人、横破線: 観光客1000人 | 点の大きさ = 植物資源種数",
     x = "祭り関係者数（人）[対数]",
     y = "観光客数（人）[対数]",
-    caption = "雄琴学区は観光客数不明のため除外"
+    caption = "雄琴学区ヨシ松明一斉点火・熊野速玉大社は観光客数不明のため除外"
   ) +
   theme_bw(base_family = "HiraginoSans-W3") +
   theme(plot.title = element_text(face = "bold"),
@@ -1130,108 +1621,151 @@ ggsave(file.path(OUTPUT_DIR, "16_procurement_embeddedness.png"), p16_embed,
        width = 10, height = 7, dpi = 150)
 
 # ==============================================================================
-# 図17: 伝統生態知識（TEK）の深さ（植物の選定理由）
-#   各祭りのTEKタイプ構成：eco/aes/trad/prag/symb
+# 図17: 植物の選定理由の類型（旧TEK分析を全面改訂）
+# ------------------------------------------------------------------------------
+# 17a 理由類型の全体分布（素 vs 府県ウェイト補正）
+# 17b 主要植物ごとの理由構成
+# 解析単位は 祭り×植物分類群。1単位が複数の理由類型を持つため、
+# 割合の合計は100%を超える（多重ラベル）。
 # ==============================================================================
 
-tek_long <- resource_df %>%
-  filter(!is.na(tek_types)) %>%
-  mutate(tek_split = str_split(tek_types, "\\|")) %>%
-  unnest(tek_split) %>%
-  filter(tek_split != "") %>%
-  rename(tek_type = tek_split) %>%
-  group_by(festival, tek_type) %>%
-  summarise(n = n(), .groups = "drop")
+reason_long <- plant_festival %>%
+  filter(!is.na(reason_types)) %>%
+  separate_rows(reason_types, sep = "\\|") %>%
+  rename(rtype = reason_types) %>%
+  mutate(rlabel = factor(unname(REASON_LABELS[rtype]),
+                         levels = unname(REASON_LABELS)))
 
-tek_labels <- c(
-  eco  = "生態的特性\n（燃焼・形状等）",
-  aes  = "審美的・感覚的\n（色・香り等）",
-  trad = "伝統・慣習\n（昔から）",
-  prag = "実用的可及性\n（多い・入手容易）",
-  symb = "象徴・宗教的\n（縁起・神聖）"
-)
+n_unit      <- nrow(plant_festival)
+n_unit_coded<- sum(!is.na(plant_festival$reason_types))
+cat("\n=== 選定理由の解析単位 ===\n")
+cat("祭り×植物分類群:", n_unit, "単位（うち理由が読み取れたもの", n_unit_coded, "）\n")
+cat("1単位あたりの理由類型数:\n")
+print(table(vapply(plant_festival$reason_types,
+                   function(z) if (is.na(z)) 0L else length(strsplit(z, "\\|")[[1]]),
+                   integer(1))))
 
-tek_colors <- c(
-  eco  = "#1F77B4",
-  aes  = "#E377C2",
-  trad = "#FF7F0E",
-  prag = "#2CA02C",
-  symb = "#9467BD"
-)
-
-# 全体のTEKタイプ比率
-tek_total <- tek_long %>%
-  group_by(tek_type) %>%
-  summarise(n = sum(n), .groups = "drop") %>%
-  mutate(pct = n / sum(n),
-         label = tek_labels[tek_type])
-
-cat("\n=== TEKタイプ全体分布 ===\n")
-print(as.data.frame(tek_total))
-
-p17a_tek_total <- tek_total %>%
-  mutate(label = factor(label, levels = tek_labels[c("eco","aes","trad","prag","symb")])) %>%
-  ggplot(aes(x = fct_reorder(label, n), y = n)) +
-  geom_col(fill = "#2166AC", alpha = 0.85) +
-  geom_text(aes(label = paste0(n, "\n(", scales::percent(pct, 1), ")")),
-            hjust = -0.1, size = 3) +
-  coord_flip() +
-  scale_y_continuous(limits = c(0, max(tek_total$n) * 1.25)) +
-  labs(
-    title = "伝統生態知識（TEK）のタイプ分布（全資源）",
-    subtitle = "選定理由に含まれるTEKタイプの延べ件数",
-    x = NULL, y = "延べ件数"
-  ) +
-  theme_bw(base_family = "HiraginoSans-W3") +
-  theme(plot.title = element_text(face = "bold"))
-
-ggsave(file.path(OUTPUT_DIR, "17a_tek_types_overall.png"), p17a_tek_total,
-       width = 9, height = 5, dpi = 150)
-
-# 祭り別TEK構成
-tek_festival_pct <- tek_long %>%
-  group_by(festival) %>%
-  mutate(pct = n / sum(n)) %>%
-  ungroup() %>%
+# --- 17a: 理由類型の全体分布（素 vs 補正）-----------------------------------
+# 「その理由を挙げた 祭り×植物 単位」の割合を、ウェイト付きでも計算する
+u_reason <- table(factor(reason_long$festival, levels = fest_design$festival),
+                  reason_long$rtype)
+# ※ ここでは祭り単位ではなく単位（祭り×植物）を数えるので行列は使わず直接集計
+reason_share <- reason_long %>%
+  count(rtype, rlabel, name = "raw_n") %>%
+  left_join(
+    reason_long %>%
+      group_by(rtype) %>%
+      summarise(w_n = sum(w), .groups = "drop"),
+    by = "rtype"
+  ) %>%
   mutate(
-    tek_label = factor(tek_type,
-                       levels = c("eco","aes","trad","prag","symb"),
-                       labels = c("生態的特性","審美的","伝統慣習","実用可及性","象徴宗教"))
-  )
+    raw_share = raw_n / n_unit_coded,
+    w_share   = w_n / sum(plant_festival$w[!is.na(plant_festival$reason_types)])
+  ) %>%
+  arrange(desc(w_share))
 
-tek_eco_order <- tek_long %>%
-  filter(tek_type == "eco") %>%
-  group_by(festival) %>%
-  summarise(eco_n = sum(n), .groups = "drop") %>%
-  arrange(desc(eco_n)) %>%
-  pull(festival)
+cat("\n=== 選定理由の類型別シェア（素 vs 府県ウェイト補正）===\n")
+print(as.data.frame(reason_share %>%
+  transmute(類型 = rlabel, 件数 = raw_n,
+            素のシェア = round(raw_share, 3),
+            補正シェア = round(w_share, 3))))
 
-p17b_tek_festival <- tek_festival_pct %>%
-  mutate(festival = factor(festival, levels = c(
-    setdiff(sheets, tek_eco_order), tek_eco_order))) %>%
-  ggplot(aes(x = festival, y = pct, fill = tek_label)) +
-  geom_col(position = "stack", width = 0.7) +
-  coord_flip() +
-  scale_fill_manual(
-    values = c("生態的特性"  = "#1F77B4",
-               "審美的"     = "#E377C2",
-               "伝統慣習"   = "#FF7F0E",
-               "実用可及性" = "#2CA02C",
-               "象徴宗教"   = "#9467BD"),
-    name = "TEKタイプ"
-  ) +
-  scale_y_continuous(labels = scales::percent) +
+p17a <- reason_share %>%
+  mutate(rlabel = fct_reorder(rlabel, w_share)) %>%
+  select(rlabel, raw_share, w_share) %>%
+  pivot_longer(-rlabel, names_to = "kind", values_to = "share") %>%
+  mutate(kind = factor(kind, levels = c("raw_share", "w_share"),
+                       labels = c("素のシェア（30祭りの標本）",
+                                  "府県ウェイト補正後"))) %>%
+  ggplot(aes(x = share, y = rlabel, fill = kind)) +
+  geom_col(position = position_dodge(width = 0.72), width = 0.68, alpha = 0.9) +
+  geom_text(aes(label = scales::percent(share, accuracy = 1)),
+            position = position_dodge(width = 0.72), hjust = -0.15, size = 2.8,
+            family = "HiraginoSans-W3") +
+  scale_fill_manual(values = c("#BDBDBD", "#D62728"), name = NULL) +
+  scale_x_continuous(labels = scales::percent, limits = c(0, 0.62)) +
   labs(
-    title = "伝統生態知識（TEK）の構成（祭り別）",
-    subtitle = "植物の選定理由に含まれるTEKタイプの比率",
-    x = NULL, y = "割合"
+    title = "植物を選ぶ理由の類型",
+    subtitle = paste0("解析単位＝祭り×植物分類群（n = ", n_unit_coded,
+                      "、部位の重複は集約、理由は和集合）\n",
+                      "1単位が複数類型を持つため合計は100%を超える"),
+    x = "その理由を挙げた単位の割合", y = NULL
   ) +
   theme_bw(base_family = "HiraginoSans-W3") +
   theme(plot.title = element_text(face = "bold"),
+        legend.position = "bottom",
+        panel.grid.major.y = element_blank())
+
+ggsave(file.path(OUTPUT_DIR, "17a_reason_types_overall.png"), p17a,
+       width = 9, height = 6, dpi = 150)
+
+# --- 17b: 主要植物ごとの理由構成（ウェイト付き）-----------------------------
+major_taxa <- prev_tax %>% filter(raw_n >= 3) %>% pull(taxon)
+
+reason_by_taxon <- reason_long %>%
+  filter(resource_taxon %in% major_taxa) %>%
+  group_by(resource_taxon, rtype, rlabel) %>%
+  summarise(w_n = sum(w), .groups = "drop") %>%
+  left_join(
+    plant_festival %>%
+      filter(resource_taxon %in% major_taxa, !is.na(reason_types)) %>%
+      group_by(resource_taxon) %>%
+      summarise(w_tot = sum(w), n_fes = n(), .groups = "drop"),
+    by = "resource_taxon"
+  ) %>%
+  mutate(share = w_n / w_tot,
+         taxon_label = paste0(resource_taxon, "（", n_fes, "祭り）"))
+
+taxon_ord <- prev_tax %>% filter(raw_n >= 3) %>% arrange(w_prev) %>% pull(taxon)
+reason_by_taxon <- reason_by_taxon %>%
+  mutate(taxon_label = factor(taxon_label,
+    levels = unique(taxon_label[order(match(resource_taxon, taxon_ord))])))
+
+# 多重ラベルのため積み上げ棒だと合計が100%を超えて読みにくい。
+# 「その植物を使う祭りのうち、その理由を挙げた割合」をヒートマップで示す。
+reason_grid <- expand_grid(
+  taxon_label = levels(reason_by_taxon$taxon_label),
+  rlabel      = factor(unname(REASON_LABELS), levels = unname(REASON_LABELS))
+) %>%
+  left_join(reason_by_taxon %>% select(taxon_label, rlabel, share),
+            by = c("taxon_label", "rlabel")) %>%
+  mutate(share = ifelse(is.na(share), 0, share),
+         taxon_label = factor(taxon_label, levels = levels(reason_by_taxon$taxon_label)))
+
+p17b <- ggplot(reason_grid, aes(x = rlabel, y = taxon_label, fill = share)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = ifelse(share > 0, scales::percent(share, accuracy = 1), "")),
+            size = 2.7, family = "HiraginoSans-W3",
+            color = ifelse(reason_grid$share > 0.5, "white", "gray20")) +
+  scale_fill_gradient(low = "#FFF7EC", high = "#B30000",
+                      labels = scales::percent, name = "その理由を挙げた割合") +
+  labs(
+    title = "主要植物ごとの選定理由の構成",
+    subtitle = paste0("3祭り以上で使われた植物。セル＝その植物を使う祭りのうち、",
+                      "その理由が語られた割合（府県ウェイト補正後）。\n",
+                      "1単位が複数類型を持つため行の合計は100%を超える。"),
+    x = NULL, y = NULL
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 30, hjust = 1),
         legend.position = "bottom")
 
-ggsave(file.path(OUTPUT_DIR, "17b_tek_by_festival.png"), p17b_tek_festival,
-       width = 10, height = 7, dpi = 150)
+ggsave(file.path(OUTPUT_DIR, "17b_reason_by_plant.png"), p17b,
+       width = 10, height = 6.5, dpi = 150)
+
+write.csv(
+  plant_festival %>%
+    select(pref, festival, resource_taxon, n_parts, parts, reason_types, w),
+  file.path(OUTPUT_DIR, "plant_festival_units.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
+write.csv(
+  reason_share %>% select(rtype, rlabel, raw_n, raw_share, w_n, w_share),
+  file.path(OUTPUT_DIR, "reason_type_share.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
 
 # ==============================================================================
 # 図20: 利用方法カテゴリー × 代替可能性
@@ -1592,6 +2126,16 @@ write.csv(
 write.csv(
   embed_festival,
   file.path(OUTPUT_DIR, "embeddedness_by_festival.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
+
+# 景観分類の判定結果（原文つき）— classify_landscape() の妥当性確認用
+write.csv(
+  resource_df %>%
+    select(festival, resource_raw, landscape_raw, landscape_norm) %>%
+    mutate(landscape_raw = str_replace_all(landscape_raw, "[\r\n]+", " ")) %>%
+    arrange(landscape_norm, festival),
+  file.path(OUTPUT_DIR, "landscape_mapping_check.csv"),
   row.names = FALSE, fileEncoding = "UTF-8"
 )
 
