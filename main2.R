@@ -2341,6 +2341,101 @@ write.csv(
   row.names = FALSE, fileEncoding = "UTF-8"
 )
 
+# ==============================================================================
+# 図23: 調達方法の内訳 — 府県別・植物別
+# ------------------------------------------------------------------------------
+# 図16（祭り別）と同じ設計を、集計単位だけ府県／植物分類群に変えて再利用する。
+# 府県ウェイトは使わない：ここでの問いは「観測された30祭りの範囲内で、
+# 府県や植物ごとに調達方法がどう違うか」という記述であり、母集団への
+# 一般化ではないため（母集団推定が要る分析は図03a・keystone_scoreで別途実施済み）。
+# ------------------------------------------------------------------------------
+
+embed_lv <- c("3: 共同体が自ら採取・栽培", "2: 地域内から無償で入手", "1: 購入・地域外に依存")
+embed_pal <- c("3: 共同体が自ら採取・栽培" = "#1A6A1A",
+              "2: 地域内から無償で入手"   = "#74C476",
+              "1: 購入・地域外に依存"     = "#D62728")
+
+embed_records <- resource_df %>%
+  filter(!is.na(embed_score)) %>%
+  mutate(pref = unname(FESTIVAL_PREF[festival]),
+         embed_label = factor(embed_score, levels = c(3, 2, 1), labels = embed_lv))
+
+# 共通のプロット関数（集計キーだけ差し替える）
+plot_embed_breakdown <- function(df, group_var, title, subtitle, y_lab = NULL,
+                                  order_desc = TRUE) {
+  summary_tbl <- df %>%
+    group_by({{ group_var }}) %>%
+    summarise(mean_embed = mean(embed_score, na.rm = TRUE),
+              n_total = n(), .groups = "drop") %>%
+    arrange(if (order_desc) desc(mean_embed) else mean_embed)
+  ord <- summary_tbl %>% pull({{ group_var }})
+
+  long_tbl <- df %>%
+    count({{ group_var }}, embed_label) %>%
+    group_by({{ group_var }}) %>%
+    mutate(pct = n / sum(n)) %>%
+    ungroup() %>%
+    mutate("{{group_var}}" := factor({{ group_var }}, levels = ord))
+
+  label_tbl <- summary_tbl %>%
+    mutate("{{group_var}}" := factor({{ group_var }}, levels = ord))
+
+  list(
+    summary = summary_tbl,
+    plot = ggplot(long_tbl, aes(x = {{ group_var }}, y = pct, fill = embed_label)) +
+      geom_col(position = "stack", width = 0.7) +
+      geom_text(data = label_tbl,
+                aes(x = {{ group_var }}, y = 1.06,
+                    label = sprintf("%.1f (n=%d)", mean_embed, n_total)),
+                inherit.aes = FALSE, size = 3, color = "gray30",
+                family = "HiraginoSans-W3") +
+      coord_flip() +
+      scale_fill_manual(values = embed_pal, name = "調達方法") +
+      scale_y_continuous(labels = scales::percent, limits = c(0, 1.16)) +
+      labs(title = title, subtitle = subtitle, x = y_lab,
+           y = "植物資源レコードの割合") +
+      theme_bw(base_family = "HiraginoSans-W3") +
+      theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+  )
+}
+
+# --- 23a: 府県別 ---
+res_pref <- plot_embed_breakdown(
+  embed_records, pref,
+  title = "調達方法の内訳（府県別）",
+  subtitle = "右の数値 = 嵌入度平均 (n=記録数)。府県ウェイトなし（観測された標本の記述）"
+)
+cat("
+=== 調達方法（府県別） ===
+"); print(as.data.frame(res_pref$summary))
+ggsave(file.path(OUTPUT_DIR, "23a_embed_by_pref.png"), res_pref$plot,
+       width = 9, height = 4.5, dpi = 150)
+
+# --- 23b: 植物別 ---
+res_taxon <- plot_embed_breakdown(
+  embed_records, resource_taxon,
+  title = "調達方法の内訳（植物別）",
+  subtitle = "右の数値 = 嵌入度平均 (n=記録数)。府県ウェイトなし（観測された標本の記述）"
+)
+cat("
+=== 調達方法（植物別） ===
+"); print(as.data.frame(res_taxon$summary))
+ggsave(file.path(OUTPUT_DIR, "23b_embed_by_plant.png"), res_taxon$plot,
+       width = 9.5, height = max(6, nrow(res_taxon$summary) * 0.34), dpi = 150)
+
+# --- 参考：府県×植物 クロス表（CSVのみ。セルの多くはn<3のため図にはしない）---
+embed_cross <- embed_records %>%
+  filter(resource_taxon %in% (res_taxon$summary %>% filter(n_total >= 3) %>% pull(resource_taxon))) %>%
+  count(pref, resource_taxon, embed_label) %>%
+  pivot_wider(names_from = embed_label, values_from = n, values_fill = 0) %>%
+  arrange(resource_taxon, pref)
+
+write.csv(res_pref$summary, file.path(OUTPUT_DIR, "embed_by_pref.csv"),
+          row.names = FALSE, fileEncoding = "UTF-8")
+write.csv(res_taxon$summary, file.path(OUTPUT_DIR, "embed_by_plant.csv"),
+          row.names = FALSE, fileEncoding = "UTF-8")
+write.csv(embed_cross, file.path(OUTPUT_DIR, "embed_pref_x_plant.csv"),
+          row.names = FALSE, fileEncoding = "UTF-8")
 
 # ==============================================================================
 # 図18: 生息地依存ネットワーク（祭り × 景観タイプ）
