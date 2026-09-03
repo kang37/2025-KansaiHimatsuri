@@ -2423,19 +2423,107 @@ cat("
 ggsave(file.path(OUTPUT_DIR, "23b_embed_by_plant.png"), res_taxon$plot,
        width = 9.5, height = max(6, nrow(res_taxon$summary) * 0.34), dpi = 150)
 
-# --- 参考：府県×植物 クロス表（CSVのみ。セルの多くはn<3のため図にはしない）---
-embed_cross <- embed_records %>%
-  filter(resource_taxon %in% (res_taxon$summary %>% filter(n_total >= 3) %>% pull(resource_taxon))) %>%
-  count(pref, resource_taxon, embed_label) %>%
-  pivot_wider(names_from = embed_label, values_from = n, values_fill = 0) %>%
-  arrange(resource_taxon, pref)
-
 write.csv(res_pref$summary, file.path(OUTPUT_DIR, "embed_by_pref.csv"),
           row.names = FALSE, fileEncoding = "UTF-8")
 write.csv(res_taxon$summary, file.path(OUTPUT_DIR, "embed_by_plant.csv"),
           row.names = FALSE, fileEncoding = "UTF-8")
-write.csv(embed_cross, file.path(OUTPUT_DIR, "embed_pref_x_plant.csv"),
-          row.names = FALSE, fileEncoding = "UTF-8")
+
+# ==============================================================================
+# 図23c: 同じ植物が府県によって調達方法が変わるか
+# ------------------------------------------------------------------------------
+# 23a・23bは「府県別」「植物別」を別々に周辺化した分布だった。ここではその
+# 交差＝「ある県のある植物は主にどう調達されるか、他県と明確に違うか」を
+# 直接見る。1つの植物について、それが記録された複数の府県を並べて比較する
+# （＝植物ごとに小図を作り、その中で府県別のスタック棒を描く）。
+#
+# 対象は2府県以上で記録がある14分類群（1府県のみの植物は「県差」を
+# 定義できないため対象外。単一府県のみの植物は embed_by_plant.csv 参照）。
+# 全パネルで府県の並び順を統一（PREF_ORDER）し、記録のない府県は空欄の
+# ままにする。これにより「京都・滋賀は自給側に、和歌山・奈良は購入側に
+# 偏る」といった、複数の植物にまたがる地理的パターンが見えるかどうかを
+# パネル間で見比べられるようにしている。
+# 小図の並びは県間の差（最大−最小の嵌入度平均）が大きい順。
+# ------------------------------------------------------------------------------
+
+pref_x_plant <- embed_records %>%
+  group_by(resource_taxon, pref) %>%
+  summarise(mean_embed = mean(embed_score), n = n(), .groups = "drop")
+
+multi_pref_taxa <- pref_x_plant %>%
+  count(resource_taxon, name = "n_pref") %>%
+  filter(n_pref >= 2)
+
+cat("
+=== 2府県以上で記録がある植物（図23c対象）", nrow(multi_pref_taxa), "分類群 ===
+")
+
+taxon_spread <- pref_x_plant %>%
+  filter(resource_taxon %in% multi_pref_taxa$resource_taxon) %>%
+  group_by(resource_taxon) %>%
+  summarise(spread = max(mean_embed) - min(mean_embed),
+            n_pref = n(), n_rec = sum(n), .groups = "drop") %>%
+  arrange(desc(spread))
+print(as.data.frame(taxon_spread %>%
+  mutate(spread = round(spread, 2))))
+
+taxon_order_23c <- taxon_spread %>%
+  mutate(label = paste0(resource_taxon, "（差", sprintf("%.1f", spread), "）")) %>%
+  pull(label)
+
+plot_df_23c <- embed_records %>%
+  filter(resource_taxon %in% multi_pref_taxa$resource_taxon) %>%
+  left_join(taxon_spread, by = "resource_taxon") %>%
+  mutate(
+    taxon_label = paste0(resource_taxon, "（差", sprintf("%.1f", spread), "）"),
+    taxon_label = factor(taxon_label, levels = taxon_order_23c),
+    pref = factor(pref, levels = rev(PREF_ORDER))
+  ) %>%
+  count(taxon_label, pref, embed_label, .drop = FALSE) %>%
+  group_by(taxon_label, pref) %>%
+  mutate(n_pref_taxon = sum(n)) %>%
+  ungroup() %>%
+  filter(n_pref_taxon > 0) %>%
+  group_by(taxon_label, pref) %>%
+  mutate(pct = n / sum(n)) %>%
+  ungroup()
+
+n_label_23c <- plot_df_23c %>% distinct(taxon_label, pref, n_pref_taxon)
+
+p23c <- ggplot(plot_df_23c, aes(x = pref, y = pct, fill = embed_label)) +
+  geom_col(position = "stack", width = 0.7) +
+  geom_text(data = n_label_23c,
+            aes(x = pref, y = 1.12, label = n_pref_taxon),
+            inherit.aes = FALSE, size = 2.6, color = "gray30") +
+  facet_wrap(~ taxon_label, ncol = 4) +
+  coord_flip() +
+  scale_x_discrete(drop = FALSE) +
+  scale_fill_manual(values = embed_pal, name = "調達方法") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1.22),
+                     breaks = c(0, 0.5, 1)) +
+  labs(
+    title = "同じ植物でも府県によって調達方法は違うか",
+    subtitle = paste0("2府県以上で記録がある", nrow(multi_pref_taxa), "分類群。",
+                      "府県の並びは全パネル共通（PREF_ORDER）。数字＝その県でのレコード数
+",
+                      "小図は県間の差（嵌入度平均の最大−最小）が大きい順。",
+                      "記録のない県は空欄（＝欠測であって0ではない）"),
+    x = NULL, y = "植物資源レコードの割合"
+  ) +
+  theme_bw(base_family = "HiraginoSans-W3") +
+  theme(plot.title = element_text(face = "bold"),
+        strip.text = element_text(size = 8),
+        legend.position = "bottom")
+
+ggsave(file.path(OUTPUT_DIR, "23c_embed_pref_x_plant.png"), p23c,
+       width = 12, height = ceiling(nrow(multi_pref_taxa) / 4) * 2.3 + 1.5, dpi = 150)
+
+write.csv(
+  pref_x_plant %>% filter(resource_taxon %in% multi_pref_taxa$resource_taxon) %>%
+    left_join(taxon_spread %>% select(resource_taxon, spread), by = "resource_taxon") %>%
+    arrange(desc(spread), resource_taxon, desc(mean_embed)),
+  file.path(OUTPUT_DIR, "embed_pref_x_plant.csv"),
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
 
 # ==============================================================================
 # 図18: 生息地依存ネットワーク（祭り × 景観タイプ）
